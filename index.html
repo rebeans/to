@@ -1,0 +1,2758 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+    <title>공항 버스노선 GPS 통합</title>
+
+    <!-- Leaflet -->
+    <link rel="stylesheet"
+          href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <!-- Leaflet Routing Machine -->
+    <link rel="stylesheet"
+          href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css">
+
+    <script src="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.js"></script>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: Arial, "Noto Sans KR", sans-serif;
+        }
+
+        #map {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* ------------------------------
+           상단 시간
+        ------------------------------ */
+        #currentTime {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 1000;
+
+            font-size: 60px;
+            font-weight: bold;
+            color: red;
+
+            line-height: 1;
+            text-shadow:
+                1px 1px 2px white,
+                -1px -1px 2px white,
+                1px -1px 2px white,
+                -1px 1px 2px white;
+
+            pointer-events: none;
+        }
+
+        /* ------------------------------
+           출발 설정
+        ------------------------------ */
+        #departurePanel {
+            position: absolute;
+            top: 80px;
+            right: 10px;
+            z-index: 1000;
+
+            max-width: 95vw;
+
+            background: rgba(255,255,255,0.95);
+            padding: 8px;
+
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+        }
+
+        #departurePanelHeader {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        #departurePanelToggle {
+            flex: 0 0 auto;
+
+            width: 30px;
+            height: 30px;
+
+            border: 0;
+            border-radius: 6px;
+
+            background: #e5e7eb;
+            color: #333333;
+
+            font-size: 16px;
+            line-height: 1;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        #departurePanelBody {
+            margin-top: 6px;
+        }
+
+        #departurePanel.collapsed #departurePanelBody {
+            display: none;
+        }
+
+        #departurePanel.collapsed #routeInfo {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        #departurePanel select {
+            font-size: 16px;
+            padding: 4px 6px;
+            margin-right: 4px;
+            margin-top: 4px;
+        }
+
+        #routeInfo {
+            flex: 1 1 auto;
+            min-width: 0;
+
+            font-size: 15px;
+            font-weight: bold;
+        }
+
+        #departureAlarmButton {
+            width: 100%;
+            margin-top: 7px;
+            padding: 5px 8px;
+            font-size: 14px;
+            font-weight: bold;
+            border: 0;
+            border-radius: 6px;
+            background: #808080;
+            color: white;
+            cursor: pointer;
+        }
+
+        #departureAlarmButton.on {
+            background: #16a34a;
+        }
+
+        /* ------------------------------
+           다음 정류장
+        ------------------------------ */
+        #scheduleResult {
+            position: absolute;
+            right: 10px;
+            bottom: 20px;
+            z-index: 1000;
+
+            min-width: 350px;
+            max-width: 95vw;
+
+            background: rgba(255,255,255,0.95);
+            padding: 10px 14px;
+
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+
+            font-size: 22px;
+            font-weight: bold;
+        }
+
+        /* 이번 정류장(윗줄) / 다음 정류장(아랫줄) */
+        #scheduleResult .line {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+
+            padding: 4px 0;
+            white-space: nowrap;
+        }
+
+        #scheduleResult .line + .line {
+            border-top: 1px solid rgba(0,0,0,0.12);
+        }
+
+        #scheduleResult .tag {
+            flex: 0 0 auto;
+
+            padding: 2px 8px;
+            border-radius: 6px;
+
+            font-size: 14px;
+            font-weight: bold;
+            color: #ffffff;
+        }
+
+        #scheduleResult .current .tag {
+            background: #dc2626;
+        }
+
+        #scheduleResult .next .tag {
+            background: #6b7280;
+        }
+
+        #scheduleResult .name {
+            flex: 1 1 auto;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        #scheduleResult .current .name {
+            font-size: 30px;
+            color: #111111;
+        }
+
+        #scheduleResult .next .name {
+            font-size: 30px;
+            color: #444444;
+        }
+
+        #scheduleResult .eta {
+            flex: 0 0 auto;
+            font-size: 32px;
+            color: #0052cc;
+        }
+
+        /* 다음 정류장 안내방송 버튼 */
+        #stationAnnouncementButton {
+            width: 100%;
+            margin-top: 8px;
+            padding: 6px 8px;
+            font-size: 14px;
+            font-weight: bold;
+            border: 0;
+            border-radius: 6px;
+            background: #808080;
+            color: white;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        #stationAnnouncementButton.on {
+            background: #16a34a;
+        }
+
+
+        /* ------------------------------
+           현재 위치 버튼
+        ------------------------------ */
+        #gpsLocateButton {
+            position: absolute;
+            right: 10px;
+            bottom: 210px;
+            z-index: 1000;
+
+            width: 46px;
+            height: 46px;
+
+            border: none;
+            border-radius: 50%;
+
+            background: rgba(255,255,255,0.96);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+
+            font-size: 40px;
+            line-height: 46px;
+            text-align: center;
+
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        #gpsLocateButton:active {
+            transform: scale(0.94);
+        }
+
+        #gpsLocateButton.following {
+            background: #e8f3ff;
+            box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.5), 0 2px 8px rgba(0,0,0,0.5);
+        }
+
+        /* ------------------------------
+           정류장 라벨
+        ------------------------------ */
+        .station-label {
+            background: transparent !important;
+            border: none !important;
+            box-shadow: none !important;
+
+            color: black;
+            font-size: 13px;
+            font-weight: bold;
+
+            text-shadow:
+                1px 1px 0 white,
+                -1px -1px 0 white,
+                1px -1px 0 white,
+                -1px 1px 0 white;
+
+            white-space: nowrap;
+        }
+
+        .station-label:before {
+            display: none !important;
+        }
+
+        /* Routing Machine UI 숨김 */
+        .leaflet-routing-container {
+            display: none !important;
+        }
+
+        /* GPS 현재 위치 - 형광색 두근두근 원형 */
+        .gps-arrow {
+            width: 30px;
+            height: 30px;
+            position: relative;
+            transform-origin: center center;
+            filter: drop-shadow(0 1px 3px rgba(0,0,0,0.45));
+        }
+
+        /* 두근거리는 바깥 테두리 */
+        .gps-arrow::before {
+            content: '';
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            width: 22px;
+            height: 22px;
+            transform: translate(-50%, -50%);
+            border-radius: 50%;
+            border: 2px solid rgba(124, 252, 0, 0.75);
+            box-sizing: border-box;
+            animation: gpsPulse 1.5s ease-out infinite;
+        }
+
+        /* 실제 GPS 점 */
+        .gps-arrow::after {
+            content: '';
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            width: 16px;
+            height: 16px;
+            transform: translate(-50%, -50%);
+            border-radius: 50%;
+            background: #7CFC00;
+            border: 2px solid #ffffff;
+            box-sizing: border-box;
+            box-shadow:
+                0 0 4px rgba(0, 0, 0, 0.6),
+                0 0 8px rgba(124, 252, 0, 0.9);
+            animation: gpsBeat 1.5s ease-in-out infinite;
+        }
+
+        /* GPS 위치가 두근두근 */
+        @keyframes gpsBeat {
+            0%, 100% {
+                transform: translate(-50%, -50%) scale(1);
+            }
+
+            12% {
+                transform: translate(-50%, -50%) scale(1.12);
+            }
+
+            24% {
+                transform: translate(-50%, -50%) scale(1);
+            }
+
+            36% {
+                transform: translate(-50%, -50%) scale(1.08);
+            }
+
+            48% {
+                transform: translate(-50%, -50%) scale(1);
+            }
+        }
+
+        /* 바깥 링이 퍼지는 효과 */
+        @keyframes gpsPulse {
+            0% {
+                opacity: 0.8;
+                transform: translate(-50%, -50%) scale(0.8);
+            }
+
+            70% {
+                opacity: 0;
+                transform: translate(-50%, -50%) scale(1.5);
+            }
+
+            100% {
+                opacity: 0;
+                transform: translate(-50%, -50%) scale(1.5);
+            }
+        }
+
+        /* 정류장 */
+        .station-dot {
+            width: 12px;
+            height: 12px;
+
+            background: #0066ff;
+            border: 2px solid white;
+            border-radius: 50%;
+
+            box-shadow: 0 0 3px rgba(0,0,0,0.5);
+        }
+
+    </style>
+</head>
+
+<body>
+
+<div id="map"></div>
+
+<div id="currentTime">00:00:00</div>
+
+<div id="departurePanel">
+
+    <div id="departurePanelHeader">
+        <div id="routeInfo">현재 노선 : -</div>
+        <button id="departurePanelToggle" type="button" aria-label="펼치기/접기">▼</button>
+    </div>
+
+    <div id="departurePanelBody">
+
+        <select id="routeSelect">
+            <option value="01">01번</option>
+            <option value="02">02번</option>
+            <option value="03">03번</option>
+            <option value="04">04번</option>
+            <option value="05">05번</option>
+        </select>
+
+        <select id="dayType" style="display:none;">
+            <option value="workday">평일</option>
+            <option value="holiday">휴일</option>
+        </select>
+
+        <select id="departureNumber"></select>
+
+        <select id="departureTime"></select>
+
+        <button id="departureAlarmButton" type="button">🔊 출발 알람 OFF</button>
+
+    </div>
+
+</div>
+
+<div id="scheduleResult">
+
+    <div class="line current">
+        <span class="tag">이번</span>
+        <span class="name" id="currentStationText">GPS 확인 중...</span>
+        <span class="eta" id="currentStationEta"></span>
+    </div>
+
+    <div class="line next">
+        <span class="tag">다음</span>
+        <span class="name" id="nextStationText">-</span>
+        <span class="eta" id="nextStationEta"></span>
+    </div>
+
+    <button id="stationAnnouncementButton" type="button">🔊 안내방송 OFF</button>
+</div>
+
+<button id="gpsLocateButton" type="button" aria-label="현재 위치로 이동">⌾</button>
+
+<script>
+
+    /* ============================================================
+       지도
+    ============================================================ */
+
+    const map = L.map('map', {
+        zoomControl: true
+    }).setView([37.4602, 126.4407], 13);
+
+    L.tileLayer(
+        'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        {
+            maxZoom: 19,
+            attribution: '&copy; OpenStreetMap'
+        }
+    ).addTo(map);
+
+// =========================================================
+// 1. 공항01번 버스노선 데이터 (여객터미널 ↔ 장기탑승장 순환)
+// =========================================================
+
+const routeData_01 = [
+    { lat: 37.449042, lng: 126.453671, title: "여객터미널 동측(3C)", minutes: 0, routeType: "일반" },
+    { lat: 37.446959, lng: 126.450135, title: "여객터미널 서측(13C)", minutes: 3, routeType: "빨간색" },
+    { lat: 37.447601, lng: 126.456106, title: "장기탑승장 1번", minutes: 3, routeType: "일반" },
+    { lat: 37.447359, lng: 126.458940, title: "장기탑승장 2번", minutes: 1, routeType: "일반" },
+    { lat: 37.445535, lng: 126.457516, title: "장기탑승장 3번", minutes: 1, routeType: "일반" },
+    { lat: 37.443051, lng: 126.453148, title: "장기탑승장 4번", minutes: 2, routeType: "일반" },
+    { lat: 37.442498, lng: 126.452088, title: "장기탑승장 5번", minutes: 1, routeType: "일반" },
+    { lat: 37.442807, lng: 126.450505, title: "장기탑승장 6번", minutes: 1, routeType: "일반" },
+    { lat: 37.444772, lng: 126.451064, title: "장기탑승장 7번", minutes: 1, routeType: "일반" },
+    { lat: 37.449042, lng: 126.453671, title: "여객터미널 동측(3C)", minutes: 3, routeType: "일반" }
+];
+
+// =========================================================
+// 2. 공항02번 버스노선 데이터
+// =========================================================
+
+const routeData_02 = [
+    { lat: 37.483202, lng: 126.406771, title: "예약주차장1", minutes: 0, routeType: "일반" },
+    { lat: 37.484236, lng: 126.408622, title: "예약주차장2", minutes: 2, routeType: "일반" },
+    { lat: 37.479762, lng: 126.416953, title: "장기탑승장1", minutes: 5, routeType: "일반" },
+    { lat: 37.481701, lng: 126.415748, title: "장기탑승장2", minutes: 2, routeType: "일반" },
+    { lat: 37.483402, lng: 126.414187, title: "장기탑승장3(남)", minutes: 2, routeType: "일반" },
+    { lat: 37.483709, lng: 126.413903, title: "장기탑승장4(북)", minutes: 1, routeType: "일반" },
+    { lat: 37.483027, lng: 126.416322, title: "경로지정좌표", minutes: 0, routeType: "일반" },
+    { lat: 37.479460, lng: 126.419688, title: "장기탑승장5", minutes: 3, routeType: "일반" },
+    { lat: 37.468804, lng: 126.433488, title: "제2여객터미널", minutes: 6, routeType: "일반" },
+    { lat: 37.483202, lng: 126.406771, title: "예약주차장1", minutes: 9, routeType: "일반" }
+];
+const routeData_via = [
+    { lat: 37.483202, lng: 126.406771, title: "예약주차장1", minutes: 0, routeType: "일반" },
+    { lat: 37.484236, lng: 126.408622, title: "예약주차장2", minutes: 2, routeType: "일반" },
+    { lat: 37.479762, lng: 126.416953, title: "장기탑승장1", minutes: 5, routeType: "일반" },
+    { lat: 37.481701, lng: 126.415748, title: "장기탑승장2", minutes: 2, routeType: "일반" },
+    { lat: 37.483402, lng: 126.414187, title: "장기탑승장3(남)", minutes: 2, routeType: "일반" },
+    { lat: 37.483709, lng: 126.413903, title: "장기탑승장4(북)", minutes: 1, routeType: "일반" },
+    { lat: 37.483027, lng: 126.416322, title: "경로지정좌표", minutes: 0, routeType: "일반" },
+    { lat: 37.479460, lng: 126.419688, title: "장기탑승장5", minutes: 3, routeType: "일반" },
+    { lat: 37.468804, lng: 126.433488, title: "제2여객터미널", minutes: 6, routeType: "일반" },
+    { lat: 37.481214, lng: 126.424232, title: "정비단지", minutes: 4, routeType: "빨간색" },
+    { lat: 37.483202, lng: 126.406771, title: "예약주차장1", minutes: 5, routeType: "빨간색" }
+];
+const routeData_03 = [
+    { lat: 37.485441, lng: 126.413321, title: "출발지(T2 차고지)", minutes: 0, routeType: "빨간색" },
+    { lat: 37.486944, lng: 126.410920, title: "경로지정좌표", minutes: 0, routeType: "빨간색" },
+    { lat: 37.485100, lng: 126.418262, title: "경로지정좌표", minutes: 0, routeType: "빨간색" },
+    { lat: 37.468804, lng: 126.433488, title: "T2 여객 7번", minutes: 8, routeType: "빨간색" },
+    { lat: 37.440954, lng: 126.456907, title: "P5 예약주차장, 하얏트", minutes: 14, routeType: "일반" },
+    { lat: 37.449314, lng: 126.453672, title: "T1 여객 동측 3번", minutes: 6, routeType: "일반" },
+    { lat: 37.447517, lng: 126.450075, title: "T1 여객 서측 12번", minutes: 2, routeType: "일반" },
+    { lat: 37.440347, lng: 126.458637, title: "하얏트호텔", minutes: 3, routeType: "빨간색" },
+    { lat: 37.439354, lng: 126.461145, title: "국제업무단지, 합동청사", minutes: 2, routeType: "빨간색" },
+    { lat: 37.439373, lng: 126.463725, title: "인하국제의료센타", minutes: 1, routeType: "빨간색" },
+    { lat: 37.444395, lng: 126.472973, title: "임시1", minutes: 0, routeType: "빨간색" },
+    { lat: 37.446473, lng: 126.476594, title: "임시2", minutes: 0, routeType: "빨간색" },
+    { lat: 37.458704, lng: 126.477289, title: "화물청사역", minutes: 8, routeType: "빨간색" },
+    { lat: 37.464470, lng: 126.481293, title: "임시3", minutes: 0, routeType: "일반" },
+    { lat: 37.465283, lng: 126.474277, title: "국제우편물센터", minutes: 5, routeType: "일반" },
+    { lat: 37.463471, lng: 126.471080, title: "세관 청사", minutes: 1, routeType: "일반" },
+    { lat: 37.461268, lng: 126.467206, title: "화물A", minutes: 1, routeType: "일반" },
+    { lat: 37.460354, lng: 126.465715, title: "경로지정좌표", minutes: 0, routeType: "일반" },
+    { lat: 37.471610, lng: 126.465243, title: "AACT 제2화물터미널", minutes: 7, routeType: "일반" },
+    { lat: 37.469076, lng: 126.460710, title: "DHL", minutes: 1, routeType: "일반" },
+    { lat: 37.469604, lng: 126.461998, title: "화물B", minutes: 1, routeType: "일반" },
+    { lat: 37.472176, lng: 126.466544, title: "화물C, 세관특송", minutes: 1, routeType: "일반" },
+    { lat: 37.481346, lng: 126.466348, title: "임시4", minutes: 0, routeType: "일반" },
+    { lat: 37.481755, lng: 126.462893, title: "임시5", minutes: 0, routeType: "일반" },
+    { lat: 37.479149, lng: 126.457846, title: "G4 삼거리", minutes: 7, routeType: "일반" },
+    { lat: 37.481478, lng: 126.453723, title: "AICC", minutes: 1, routeType: "일반" },
+    { lat: 37.481252, lng: 126.451424, title: "경로지정좌표", minutes: 0, routeType: "일반" },
+    { lat: 37.482427, lng: 126.451773, title: "케이터링", minutes: 1, routeType: "일반" },
+    { lat: 37.484602, lng: 126.455614, title: "제2물류단지", minutes: 2, routeType: "일반" }
+];
+const routeData_early = [
+    { lat: 37.485441, lng: 126.413321, title: "출발지(T2 차고지)", minutes: 0, routeType: "빨간색" },
+    { lat: 37.486944, lng: 126.410920, title: "경로지정좌표", minutes: 0, routeType: "빨간색" },
+    { lat: 37.479762, lng: 126.416953, title: "장기주차장1", minutes: 5, routeType: "빨간색" },
+    { lat: 37.481701, lng: 126.415748, title: "장기주차장2", minutes: 2, routeType: "빨간색" },
+    { lat: 37.483402, lng: 126.414187, title: "장기주차장3(남측주차타워)", minutes: 2, routeType: "빨간색" },
+    { lat: 37.483709, lng: 126.413903, title: "장기주차장4(북측주차타워)", minutes: 1, routeType: "빨간색" },
+    { lat: 37.483027, lng: 126.416322, title: "경로지정좌표", minutes: 0, routeType: "빨간색" },
+    { lat: 37.479460, lng: 126.419688, title: "장기주차장5", minutes: 3, routeType: "빨간색" },
+    { lat: 37.468804, lng: 126.433488, title: "T2 여객 7번", minutes: 6, routeType: "빨간색" },
+    { lat: 37.440954, lng: 126.456907, title: "P5 예약주차장, 하얏트", minutes: 14, routeType: "일반" },
+    { lat: 37.449314, lng: 126.453672, title: "T1 여객 동측 3번", minutes: 6, routeType: "일반" },
+    { lat: 37.447517, lng: 126.450075, title: "T1 여객 서측 12번", minutes: 2, routeType: "일반" },
+    { lat: 37.440347, lng: 126.458637, title: "하얏트호텔", minutes: 3, routeType: "빨간색" },
+    { lat: 37.439354, lng: 126.461145, title: "국제업무단지, 합동청사", minutes: 2, routeType: "빨간색" },
+    { lat: 37.439373, lng: 126.463725, title: "인하국제의료센타", minutes: 1, routeType: "빨간색" },
+    { lat: 37.444395, lng: 126.472973, title: "임시1", minutes: 0, routeType: "빨간색" },
+    { lat: 37.446473, lng: 126.476594, title: "임시2", minutes: 0, routeType: "빨간색" },
+    { lat: 37.458704, lng: 126.477289, title: "화물청사역", minutes: 8, routeType: "빨간색" },
+    { lat: 37.464470, lng: 126.481293, title: "임시3", minutes: 0, routeType: "일반" },
+    { lat: 37.465283, lng: 126.474277, title: "국제우편물센터", minutes: 5, routeType: "일반" },
+    { lat: 37.463471, lng: 126.471080, title: "세관 청사", minutes: 1, routeType: "일반" },
+    { lat: 37.461268, lng: 126.467206, title: "화물A", minutes: 1, routeType: "일반" },
+    { lat: 37.460354, lng: 126.465715, title: "경로지정좌표", minutes: 0, routeType: "일반" },
+    { lat: 37.471610, lng: 126.465243, title: "AACT 제2화물터미널", minutes: 7, routeType: "일반" },
+    { lat: 37.469076, lng: 126.460710, title: "DHL", minutes: 1, routeType: "일반" },
+    { lat: 37.469604, lng: 126.461998, title: "화물B", minutes: 1, routeType: "일반" },
+    { lat: 37.472176, lng: 126.466544, title: "화물C, 세관특송", minutes: 1, routeType: "일반" },
+    { lat: 37.481346, lng: 126.466348, title: "임시4", minutes: 0, routeType: "일반" },
+    { lat: 37.481755, lng: 126.462893, title: "임시5", minutes: 0, routeType: "일반" },
+    { lat: 37.479132, lng: 126.457813, title: "G4 삼거리", minutes: 7, routeType: "일반" },
+    { lat: 37.481448, lng: 126.453702, title: "AICC", minutes: 1, routeType: "일반" },
+    { lat: 37.481252, lng: 126.451424, title: "경로지정좌표", minutes: 0, routeType: "일반" },
+    { lat: 37.482427, lng: 126.451773, title: "케이터링", minutes: 1, routeType: "일반" },
+    { lat: 37.484602, lng: 126.455614, title: "제2물류단지", minutes: 2, routeType: "일반" }
+];
+const routeData_04 = [
+    { lat: 37.484739, lng: 126.455539, title: "제2물류단지", minutes: 0, routeType: "일반" },
+    { lat: 37.482538, lng: 126.451682, title: "케이터링", minutes: 2, routeType: "일반" },
+    { lat: 37.481252, lng: 126.451424, title: "경로지정좌표", minutes: 0, routeType: "일반" },
+    { lat: 37.481516, lng: 126.453930, title: "AICC", minutes: 1, routeType: "일반" },
+    { lat: 37.479094, lng: 126.457765, title: "G4 삼거리", minutes: 1, routeType: "일반" },
+    { lat: 37.481491, lng: 126.463162, title: "임시1", minutes: 0, routeType: "일반" },
+    { lat: 37.481108, lng: 126.465790, title: "임시2", minutes: 0, routeType: "일반" },
+    { lat: 37.471610, lng: 126.465243, title: "AACT 제2화물터미널", minutes: 5, routeType: "일반" },
+    { lat: 37.469076, lng: 126.460710, title: "DHL", minutes: 1, routeType: "일반" },
+    { lat: 37.469604, lng: 126.461998, title: "화물B", minutes: 1, routeType: "일반" },
+    { lat: 37.472176, lng: 126.466544, title: "화물C, 세관특송", minutes: 1, routeType: "일반" },
+    { lat: 37.465283, lng: 126.474277, title: "국제우편물센터", minutes: 4, routeType: "일반" },
+    { lat: 37.463471, lng: 126.471080, title: "세관 청사", minutes: 1, routeType: "일반" },
+    { lat: 37.461268, lng: 126.467206, title: "화물A", minutes: 1, routeType: "일반" },
+    { lat: 37.460354, lng: 126.465715, title: "경로지정좌표", minutes: 0, routeType: "일반" },
+    { lat: 37.464206, lng: 126.480800, title: "임시3", minutes: 0, routeType: "일반" },
+    { lat: 37.458704, lng: 126.477289, title: "화물청사역(여객행)", minutes: 6, routeType: "일반" },
+    { lat: 37.446593, lng: 126.476417, title: "임시4", minutes: 0, routeType: "일반" },
+    { lat: 37.444548, lng: 126.472812, title: "임시5", minutes: 0, routeType: "일반" },
+    { lat: 37.439499, lng: 126.461593, title: "국제업무단지", minutes: 7, routeType: "일반" },
+    { lat: 37.440758, lng: 126.458540, title: "하얏트호텔", minutes: 1, routeType: "일반" },
+    { lat: 37.448690, lng: 126.451379, title: "T1 여객 8번", minutes: 6, routeType: "일반" },
+    { lat: 37.441175, lng: 126.457030, title: "P5 예약주차장", minutes: 3, routeType: "빨간색" },
+    { lat: 37.468804, lng: 126.433488, title: "T2 여객 6번", minutes: 14, routeType: "빨간색" },
+    { lat: 37.485611, lng: 126.415654, title: "경로지정좌표", minutes: 0, routeType: "일반" },
+    { lat: 37.484362, lng: 126.411746, title: "경로지정좌표", minutes: 0, routeType: "일반" },
+    { lat: 37.485441, lng: 126.413321, title: "T2 차고지", minutes: 7, routeType: "일반" }
+];
+const routeData_05 = [
+    { lat: 37.458936, lng: 126.477662, title: "화물역", minutes: 0, routeType: "일반" },
+    { lat: 37.464470, lng: 126.481293, title: "임시1", minutes: 0, routeType: "일반" },
+    { lat: 37.475463, lng: 126.472512, title: "임시2", minutes: 0, routeType: "일반" },
+    { lat: 37.479503, lng: 126.479609, title: "사업지원(입구)", minutes: 6, routeType: "일반" },
+    { lat: 37.478519, lng: 126.480317, title: "LX판토스", minutes: 1, routeType: "일반" },
+    { lat: 37.474773, lng: 126.482377, title: "한국면세점", minutes: 1, routeType: "일반" },
+    { lat: 37.475939, lng: 126.483160, title: "삼성로지스텍", minutes: 1, routeType: "일반" },
+    { lat: 37.482274, lng: 126.484169, title: "롯데", minutes: 2, routeType: "일반" },
+    { lat: 37.484309, lng: 126.482817, title: "임시3", minutes: 0, routeType: "일반" },
+    { lat: 37.482853, lng: 126.480253, title: "AMB", minutes: 2, routeType: "일반" },
+    { lat: 37.481320, lng: 126.477538, title: "해우GLS,쉥커", minutes: 1, routeType: "일반" },
+    { lat: 37.482044, lng: 126.474813, title: "하나로TNS", minutes: 1, routeType: "일반" },
+    { lat: 37.482942, lng: 126.475736, title: "인천에어카고", minutes: 1, routeType: "일반" },
+    { lat: 37.486590, lng: 126.482168, title: "칼트,동아물류", minutes: 2, routeType: "일반" },
+    { lat: 37.489034, lng: 126.481905, title: "임시4", minutes: 0, routeType: "일반" },
+    { lat: 37.489272, lng: 126.476380, title: "스테츠칩팩", minutes: 4, routeType: "일반" },
+    { lat: 37.487161, lng: 126.472700, title: "한진GDC", minutes: 1, routeType: "일반" },
+    { lat: 37.485535, lng: 126.471530, title: "AK", minutes: 1, routeType: "일반" },
+    { lat: 37.483372, lng: 126.473461, title: "제이셋", minutes: 1, routeType: "일반" },
+    { lat: 37.481959, lng: 126.474663, title: "임시5", minutes: 0, routeType: "빨간색" },
+    { lat: 37.481167, lng: 126.477699, title: "임시6", minutes: 0, routeType: "빨간색" },
+    { lat: 37.479705, lng: 126.479376, title: "사업지원(출구)", minutes: 5, routeType: "빨간색" },
+    { lat: 37.464206, lng: 126.480800, title: "임시7", minutes: 0, routeType: "빨간색" },
+    { lat: 37.458936, lng: 126.477662, title: "화물역", minutes: 10, routeType: "빨간색" }
+];
+const departureSchedules_01 = {
+  "1번": ["08:06(주간1-1)", "08:22(주간1-2)", "08:38(주간1-3)", "09:42(주간2-1)", "09:58(주간2-2)", "10:14(주간2-3)", "10:30(주간2-4)", "11:50(주간3-1)", "12:06(주간3-2)", "12:22(주간3-3)", "12:38(주간3-4)", "13:58(주간4-1)", "14:14(주간4-2)", "14:30(주간4-3)", "14:46(주간4-4)", "16:06(주간5-1)", "16:22(주간5-2)", "16:38(주간5-3)", "16:54(주간5-4)", "18:14(야간1-1)", "18:30(야간1-2)", "18:46(야간1-3)", "19:02(야간1-4)", "20:22(야간2-1)", "20:38(야간2-2)", "20:54(야간2-3)", "21:10(야간2-4)", "21:26(야간2-5)", "22:06(야간3-1)", "22:22(야간3-2)", "22:38(야간3-3)", "22:54(야간3-4)", "04:30(새벽1-1)", "04:46(새벽1-2)", "05:02(새벽1-3)", "05:18(새벽1-4)", "06:14(새벽2-1)", "06:30(새벽2-2)", "06:46(새벽2-3)", "07:02(새벽2-4)"],
+  "2번": ["08:54(주간1-1)", "09:10(주간1-2)", "09:26(주간1-3)", "10:46(주간2-1)", "11:02(주간2-2)", "11:18(주간2-3)", "11:34(주간2-4)", "12:54(주간3-1)", "13:10(주간3-2)", "13:26(주간3-3)", "13:42(주간3-4)", "15:02(주간4-1)", "15:18(주간4-2)", "15:34(주간4-3)", "15:50(주간4-4)", "17:10(주간5-1)", "17:26(주간5-2)", "17:42(주간5-3)", "17:58(주간5-4)", "19:18(야간1-1)", "19:34(야간1-2)", "19:50(야간1-3)", "20:06(야간1-4)", "20:46(야간2-1)", "21:02(야간2-2)", "21:18(야간2-3)", "21:34(야간2-4)", "21:50(야간2-5)", "23:10(야간3-1)", "23:26(야간3-2)", "23:42(야간3-3)", "24:00(야간3-4)", "05:34(새벽1-1)", "05:50(새벽1-2)", "06:06(새벽1-3)", "06:22(새벽1-4)", "06:38(새벽1-5)", "07:18(새벽2-1)", "07:34(새벽2-2)", "07:50(새벽2-3)"]
+};
+const departureSchedules_02 = {
+  "1번": ["07:54(주간1-1)", "08:24(주간1-2)", "09:55(주간2-1)", "10:25(주간2-2)", "10:55(주간2-3)", "12:56(주간3-1)", "13:26(주간3-2)", "13:56(주간3-3)", "15:57(주간4-1)", "16:27(주간4-2)", "17:58(야간1-1)", "18:28(야간1-2)", "19:59(야간2-1)", "20:29(야간2-2)", "21:59(야간3-1)", "22:29(야간3-2)", "04:05(새벽1-1)", "04:35(새벽1-2)", "05:59(새벽2-1)", "06:29(새벽2-2)"],
+  "2번": ["07:59(주간1-1)", "08:29(주간1-2)", "10:00(주간2-1)", "10:30(주간2-2)", "11:00(주간2-3)", "13:01(주간3-1)", "13:31(주간3-2)", "14:01(주간3-3)", "16:02(주간4-1)", "16:32(주간4-2)", "18:03(야간1-1)", "18:33(야간1-2)", "20:05(야간2-1)", "20:35(야간2-2)", "22:05(야간3-1)", "22:35(야간3-2)", "04:10(새벽1-1)", "04:40(새벽1-2)", "06:05(새벽2-1)", "06:35(새벽2-2)"],
+  "3번": ["08:04(주간1-1)", "08:34(주간1-2)", "10:05(주간2-1)", "10:35(주간2-2)", "11:05(주간2-3)", "13:06(주간3-1)", "13:36(주간3-2)", "14:06(주간3-3)", "16:07(주간4-1)", "16:37(주간4-2)", "18:08(야간1-1)", "18:38(야간1-2)", "20:11(야간2-1)", "20:41(야간2-2)", "22:11(야간3-1)", "22:41(야간3-2)", "04:15(새벽1-1)", "04:45(새벽1-2)", "06:11(새벽2-1)", "06:41(새벽2-2)"],
+  "4번": ["08:09(주간1-1)", "08:39(주간1-2)", "10:10(주간2-1)", "10:40(주간2-2)", "11:10(주간2-3)", "13:11(주간3-1)", "13:41(주간3-2)", "14:11(주간3-3)", "16:12(주간4-1)", "16:42(주간4-2)", "18:13(야간1-1)", "18:43(야간1-2)", "20:17(야간2-1)", "20:47(야간2-2)", "22:17(야간3-1)", "22:47(야간3-2)", "04:20(새벽1-1)", "04:50(새벽1-2)", "06:17(새벽2-1)", "06:47(새벽2-2)"],
+  "5번": ["08:14(주간1-1)", "08:44(주간1-2)", "10:15(주간2-1)", "10:45(주간2-2)", "11:15(주간2-3)", "13:16(주간3-1)", "13:46(주간3-2)", "14:16(주간3-3)", "16:17(주간4-1)", "16:47(주간4-2)", "18:18(야간1-1)", "18:48(야간1-2)", "20:23(야간2-1)", "20:53(야간2-2)", "22:23(야간3-1)", "22:53(야간3-2)", "04:25(새벽1-1)", "04:55(새벽1-2)", "06:23(새벽2-1)", "06:53(새벽2-2)", "07:23(새벽2-3)"],
+  "6번": ["08:19(주간1-1)", "08:49(주간1-2)", "10:20(주간2-1)", "10:50(주간2-2)", "11:20(주간2-3)", "13:21(주간3-1)", "13:51(주간3-2)", "14:21(주간3-3)", "16:22(주간4-1)", "16:52(주간4-2)", "18:23(야간1-1)", "18:53(야간1-2)", "20:59(야간2-1)", "21:29(야간2-2)", "22:59(야간3-1)", "23:29(야간3-2)", "04:30(새벽1-1)", "05:00(새벽1-2)", "05:30(새벽1-3)", "06:59(새벽2-1)", "07:29(새벽2-2)"],
+  "7번": ["08:55(주간1-1)", "09:25(주간1-2)", "11:26(주간2-1)", "11:56(주간2-2)", "12:26(주간2-3)", "14:27(주간3-1)", "14:57(주간3-2)", "15:27(주간3-3)", "16:58(주간4-1)", "17:28(주간4-2)", "18:59(야간1-1)", "19:29(야간1-2)", "21:05(야간2-1)", "21:35(야간2-2)", "23:05(야간3-1)", "23:35(야간3-2)", "05:06(새벽1-1)", "05:36(새벽1-2)", "07:04(새벽2-1)", "07:34(새벽2-2)"],
+  "8번": ["09:01(주간1-1)", "09:31(주간1-2)", "11:32(주간2-1)", "12:02(주간2-2)", "12:32(주간2-3)", "14:33(주간3-1)", "15:03(주간3-2)", "15:33(주간3-3)", "17:04(주간4-1)", "17:34(주간4-2)", "19:05(야간1-1)", "19:35(야간1-2)", "21:11(야간2-1)", "21:41(야간2-2)", "23:11(야간3-1)", "23:41(야간3-2)", "05:12(새벽1-1)", "05:42(새벽1-2)", "07:09(새벽2-1)", "07:39(새벽2-2)"],
+  "9번": ["09:07(주간1-1)", "09:37(주간1-2)", "11:38(주간2-1)", "12:08(주간2-2)", "12:38(주간2-3)", "14:39(주간3-1)", "15:09(주간3-2)", "15:39(주간3-3)", "17:10(주간4-1)", "17:40(주간4-2)", "19:11(야간1-1)", "19:41(야간1-2)", "21:17(야간2-1)", "21:47(야간2-2)", "23:17(야간3-1)", "23:47(야간3-2)", "05:18(새벽1-1)", "05:48(새벽1-2)", "07:14(새벽2-1)", "07:44(새벽2-2)"],
+  "10번": ["09:13(주간1-1)", "09:43(주간1-2)", "11:44(주간2-1)", "12:14(주간2-2)", "12:44(주간2-3)", "14:45(주간3-1)", "15:15(주간3-2)", "15:45(주간3-3)", "17:16(주간4-1)", "17:46(주간4-2)", "19:17(야간1-1)", "19:47(야간1-2)", "21:23(야간2-1)", "21:53(야간2-2)", "23:23(야간3-1)", "23:53(야간3-2)", "05:24(새벽1-1)", "05:54(새벽1-2)", "07:19(새벽2-1)", "07:49(새벽2-2)"],
+  "11번": ["09:19(주간1-1)", "09:49(주간1-2)", "11:50(주간2-1)", "12:20(주간2-2)", "12:50(주간2-3)", "14:51(주간3-1)", "15:21(주간3-2)", "15:51(주간3-3)", "17:22(주간4-1)", "17:52(주간4-2)", "19:23(야간1-1)", "19:53(야간1-2)", "0:00(심야1)", "0:30(심야2)", "1:00(심야3)", "1:30(심야4)", "2:30(심야5)", "3:00(심야6)", "3:30(심야7)", "4:00(심야8)"]
+};
+const departureSchedules_03 = {
+    "1번": ["07:36(주간1)", "09:23(주간2)", "11:37(주간3)", "13:53(주간4)", "16:02(주간5)", "17:40(야간1)", "19:15(야간2)", "21:20(야간3)", "04:30(새벽4)", "06:12(새벽5)"],
+    "2번": ["07:45(주간1)", "09:40(주간2)", "11:54(주간3)", "14:10(주간4)", "16:13(주간5)", "17:50(야간1)", "19:30(야간2)", "21:40(야간3)", "04:40(새벽4)", "06:25(새벽5)"],
+    "3번": ["07:56(주간1)", "09:57(주간2)", "12:11(주간3)", "14:27(주간4)", "16:25(주간5)", "18:00(야간1)", "19:45(야간2)", "22:00(야간3)", "04:54(새벽4)", "06:40(새벽5)", ],
+    "4번": ["08:08(주간1)", "10:14(주간2)", "12:28(주간3)", "14:44(주간4)", "16:37(주간5)", "18:10(야간1)", "20:00(야간2)", "22:20(야간3-화물if)", "05:05(새벽4)", "06:55(새벽5)"],
+    "5번": ["08:20(주간1)", "10:31(주간2)", "12:45(주간3)", "15:01(주간4)", "16:48(주간5)", "18:22(야간1)", "20:15(야간2)", "22:40(야간3-화물if)", "05:17(새벽4)", "07:10(새벽5)"],
+    "6번": ["08:35(주간1)", "10:48(주간2)", "13:02(주간3)", "15:18(주간4)", "17:00(주간5)", "18:35(야간1)", "20:30(야간2)", "23:00(야간3-화물if)", "05:29(새벽4)", "07:20(새벽5)"],
+    "7번": ["08:50(주간1)", "11:05(주간2)", "13:19(주간3)", "15:35(주간4)", "17:12(주간5)", "18:48(야간1)", "20:45(야간2)", "23:20(야간3-인하end)", "05:41(새벽4)", "07:30(새벽5)"],
+    "8번": ["09:06(주간1)", "11:22(주간2)", "13:36(주간3)", "15:52(주간4)", "17:25(주간5)", "19:00(야간1)", "21:00(야간2)", "23:40(야간3-업무x2)", "05:53(새벽4)", "07:40(새벽5)"]
+};
+const departureSchedules_04 = {
+    "1번": ["07:53(주간1)", "09:23(주간2)", "11:37(주간3)", "13:53(주간4)", "16:04(주간5)", "17:38(야간1)", "19:15(야간2)", "21:15(야간3)", "04:30(새벽1)", "06:04(새벽2)"],
+    "2번": ["08:05(주간1)", "09:40(주간2)", "11:54(주간3)", "14:10(주간4)", "16:16(주간5)", "17:48(야간1)", "19:30(야간2)", "21:30(야간3)", "04:42(새벽1)", "06:16(새벽2)"],
+    "3번": ["08:16(주간1)", "09:57(주간2)", "12:11(주간3)", "14:27(주간4)", "16:28(주간5)", "18:00(야간1)", "19:45(야간2)", "21:45(야간3)", "04:54(새벽1)", "06:28(새벽2)"],
+    "4번": ["08:25(주간1)", "10:14(주간2)", "12:28(주간3)", "14:44(주간4)", "16:45(주간5)", "18:20(야간1)", "20:00(야간2)", "22:00(야간3)", "05:05(새벽1)", "06:40(새벽2)"],
+    "5번": ["08:35(주간1)", "10:31(주간2)", "12:45(주간3)", "15:01(주간4)", "16:55(주간5)", "18:30(야간1)", "20:15(야간2)", "22:15(야간3)", "05:18(새벽1)", "06:46(새벽2)"],
+    "6번": ["08:45(주간1)", "10:48(주간2)", "13:02(주간3)", "15:18(주간4)", "17:05(주간5)", "18:30(야간1)", "20:30(야간2)", "22:40(야간3)", "05:30(새벽1)", "06:58(새벽2)"],
+    "7번": ["08:55(주간1)", "11:05(주간2)", "13:19(주간3)", "15:35(주간4)", "17:15(주간5)", "18:45(야간1)", "20:45(야간2)", "23:00(야간3)", "05:45(새벽1)", "07:09(새벽2)"],
+    "8번": ["09:10(주간1)", "11:22(주간2)", "13:36(주간3)", "15:52(주간4)", "17:25(주간5)", "19:00(야간1)", "21:00(야간2)", "23:20(야간3)", "05:58(새벽1)", "07:18(새벽2)"]
+};
+const departureSchedules_05_workday = {
+    "1번": ["08:30(주간1-1)", "10:00(주간2-1)", "10:40(주간2-2)", "11:20(주간2-3)", "13:00(주간3-1)", "13:40(주간3-2)", "14:20(주간3-3)", "15:40(주간4-1)", "16:20(주간4-2)", "18:00(야간1-1)", "18:40(야간1-2)", "20:20(야간2-1)", "21:00(야간2-2)", "21:40(야간2-3)", "05:42(새벽1-1)", "06:22(새벽1-2)", "07:02(새벽1-3)"],
+    "2번": ["08:40(주간1-1)", "09:20(주간1-2)", "10:20(주간2-1)", "11:00(주간2-2)", "11:40(주간2-3)", "14:00(주간3-1)", "14:40(주간3-2)", "15:20(주간3-3)", "17:00(주간4-1)", "17:40(주간4-2)", "19:20(야간1-1)", "20:00(야간1-2)", "20:40(야간1-3)", "22:20(야간2-1)", "23:00(야간2-2)", "06:42(새벽1-1)", "07:22(새벽1-2)", "08:02(새벽1-3)"],
+    "3번": ["09:00(주간1-1)", "09:40(주간1-2)", "12:00(주간2-1)", "12:40(주간2-2)", "13:20(주간2-3)", "15:00(주간3-1)", "16:00(주간4-1)", "16:40(주간4-2)", "17:20(주간4-3)", "18:20(야간1-1)", "19:00(야간1-2)", "19:40(야간1-3)", "21:20(야간2-1)", "22:00(야간2-2)", "22:40(야간2-3)", "07:42(새벽1-1)", "08:22(새벽1-2)"],
+};
+const departureSchedules_05_holiday = {
+    "1번": ["08:40(주간1-1)", "09:20(주간1-2)", "11:00(주간2-1)", "11:40(주간2-2)", "14:00(주간3-1)", "14:40(주간3-2)", "15:20(주간3-3)", "17:00(주간4-1)", "17:40(주간4-2)", "19:20(야간1-1)", "20:00(야간1-2)", "20:40(야간1-3)", "22:20(야간2-1)", "23:00(야간2-2)", "06:42(새벽1-1)", "07:22(새벽1-2)", "08:02(새벽1-3)"],
+    "2번": ["09:00(주간1-1)", "10:00(주간2-1)", "10:40(주간2-2)", "11:20(주간2-3)", "13:00(주간3-1)", "13:40(주간3-2)", "14:20(주간3-3)", "15:40(주간4-1)", "16:20(주간4-2)", "18:00(야간1-1)", "18:40(야간1-2)", "20:20(야간2-1)", "21:00(야간2-2)", "21:40(야간2-3)", "05:42(새벽1-1)", "06:22(새벽1-2)", "07:02(새벽1-3)"],
+    "3번": ["09:40(주간1-1)", "10:20(주간1-2)", "12:00(주간2-1)", "12:40(주간2-2)", "13:20(주간2-3)", "15:00(주간3-1)", "16:00(주간4-1)", "16:40(주간4-2)", "17:20(주간4-3)", "18:20(야간1-1)", "19:00(야간1-2)", "19:40(야간1-3)", "21:20(야간2-1)", "22:00(야간2-2)", "22:40(야간2-3)", "07:42(새벽1-1)", "08:22(새벽1-2)"],
+};
+
+
+    /* ============================================================
+       현재 활성화된 노선
+       ============================================================ */
+
+    let activeRouteData = routeData_02;
+
+    let routeSegments = [];
+
+    let stationMarkers = [];
+
+    // 각 routeData 구간의 실제 OSRM 도로 geometry
+    let osrmRouteGeometries = [];
+
+    /* ------------------------------------------------------------
+       GPS 상태
+       - rawGpsPosition   : 보정 전 원본 GPS
+       - lastGpsPosition  : 노선에 붙인(보정된) 위치  → 정류장 판단에 사용
+       ------------------------------------------------------------ */
+
+    let rawGpsPosition = null;          // 원본 GPS (보정 전)
+    let previousRawGpsPosition = null;  // 직전 원본 GPS
+    let lastGpsPosition = null;         // 노선에 붙인 최종 위치
+    let currentGpsHeading = null;       // 화면 표시용 진행방향
+    let stableHeading = null;           // 안정화된 진행방향
+    let headingFlipCount = 0;           // 180도 뒤집힘 감지 카운트
+
+    /* 노선(OSRM 실제 도로선)을 하나로 이은 경로 */
+    let routePath = [];                 // [{lat, lng, dist(누적 m), routeIndex}]
+    let stationProgress = [];           // routeData 인덱스별 누적거리(m)
+    let stationTriggerDistances = [];   // 정류장별 안내 기준거리(30m / 15m)
+    let realStationIndexes = [];        // 실제 정류장 인덱스 목록
+    let totalRouteLength = 0;
+
+    /* 노선 위에서의 현재 진행 위치 */
+    let matchedProgress = null;         // 노선 시작점부터의 누적거리(m)
+    let matchedPoint = null;            // 노선에 붙인 좌표
+    let matchedRouteIndex = 0;
+    let lastMatchTimestamp = 0;
+    let offRouteCount = 0;
+
+    /* ------------------------------------------------------------
+       정류장 안내 기준거리
+       - 기본 : 도착 전 30m / 출발 후 30m
+       - 정류장 간격이 좁은 곳(02번 장기탑승장3-4 등) : 15m
+       - 정류장별 예외(STATION_DISTANCE_OVERRIDES) : 01번 장기탑승장 1~7번 15m / 20m
+       ------------------------------------------------------------ */
+    const STATION_DISTANCE_DEFAULT = 30;
+    const STATION_DISTANCE_CLOSE = 15;
+    const STATION_CLOSE_GAP = 90;       // 앞뒤 정류장 간격이 90m 미만이면 좁은 정류장으로 판단
+
+    /* 정류장별 기준거리 예외 (자동 판단보다 우선 적용)
+       - 노선별 routeData 배열 → { 정류장 title : 기준거리(m) }
+       - 01번 장기탑승장 1~7번은 구간이 촘촘하여 15m / 20m 로 지정 */
+    const STATION_DISTANCE_OVERRIDES = new Map([
+        [routeData_01, {
+            "장기탑승장 1번": 20,
+            "장기탑승장 2번": 20,
+            "장기탑승장 3번": 20,
+            "장기탑승장 4번": 15,
+            "장기탑승장 5번": 15,
+            "장기탑승장 6번": 15,
+            "장기탑승장 7번": 20
+        }]
+    ]);
+
+
+    /* ============================================================
+       아이콘
+    ============================================================ */
+
+    const gpsIcon = L.divIcon({
+        className: '',
+        html: '<div class="gps-arrow"></div>',
+        iconSize: [34, 34],
+        iconAnchor: [17, 17]
+    });
+
+
+    const stationIcon = L.divIcon({
+        className: '',
+        html: '<div class="station-dot"></div>',
+        iconSize: [10, 10],
+        iconAnchor: [5, 5]
+    });
+
+
+    /* ============================================================
+       출발 선택
+    ============================================================ */
+
+    const departureNumberSelect =
+        document.getElementById('departureNumber');
+
+    const departureTimeSelect =
+        document.getElementById('departureTime');
+
+    const routeInfo =
+        document.getElementById('routeInfo');
+
+    const scheduleResult =
+        document.getElementById('scheduleResult');
+
+
+    /* ============================================================
+       상단 박스 접기 / 펼치기
+    ============================================================ */
+
+    const departurePanelEl =
+        document.getElementById('departurePanel');
+
+    const departurePanelToggle =
+        document.getElementById('departurePanelToggle');
+
+    (function initDeparturePanelCollapse() {
+
+        const savedCollapsed =
+            localStorage.getItem('airportbus_panel_collapsed');
+
+        if (savedCollapsed === 'true') {
+            departurePanelEl.classList.add('collapsed');
+            departurePanelToggle.textContent = '▲';
+        } else {
+            departurePanelToggle.textContent = '▼';
+        }
+    })();
+
+    departurePanelToggle.addEventListener('click', function() {
+
+        const collapsed =
+            departurePanelEl.classList.toggle('collapsed');
+
+        departurePanelToggle.textContent =
+            collapsed ? '▲' : '▼';
+
+        localStorage.setItem(
+            'airportbus_panel_collapsed',
+            collapsed ? 'true' : 'false'
+        );
+    });
+
+
+    /* ============================================================
+       노선 종류 표시
+    ============================================================ */
+
+    /* ============================================================
+       03 / 04 노선 회차별 routeData 배정표
+    ============================================================ */
+
+    const ROUTE_ASSIGN_03 = {
+        "새벽4": "early",   // T2 차고지 → 제2물류단지
+        "새벽5": "04",      // 제2물류단지 → T2 차고지
+        "주간1": "03",      // T2 차고지 → 제2물류단지
+        "주간2": "04",      // 제2물류단지 → T2 차고지
+        "주간3": "03",      // T2 차고지 → 제2물류단지
+        "주간4": "04",      // 제2물류단지 → T2 차고지
+        "주간5": "03",      // T2 차고지 → 제2물류단지
+        "야간1": "03",      // T2 차고지 → 제2물류단지
+        "야간2": "04",      // 제2물류단지 → T2 차고지
+        "야간3": "03"       // T2 차고지 → 제2물류단지
+    };
+
+    const ROUTE_ASSIGN_04 = {
+        "새벽1": "04",      // 제2물류단지 → T2 차고지
+        "새벽2": "early",   // T2 차고지 → 제2물류단지
+        "주간1": "04",      // 제2물류단지 → T2 차고지
+        "주간2": "03",      // T2 차고지 → 제2물류단지
+        "주간3": "04",      // 제2물류단지 → T2 차고지
+        "주간4": "03",      // T2 차고지 → 제2물류단지
+        "주간5": "04",      // 제2물류단지 → T2 차고지
+        "야간1": "04",      // 제2물류단지 → T2 차고지
+        "야간2": "03",      // T2 차고지 → 제2물류단지
+        "야간3": "04"       // 제2물류단지 → T2 차고지
+    };
+
+    // "07:36(주간1)" → "주간1",  "22:20(야간3-화물if)" → "야간3"
+    function getScheduleLabel(text) {
+        const m = String(text).match(/\(([^)]*)\)/);
+        if (!m) return '';
+        return m[1].split('-')[0].trim();
+    }
+
+    function getRouteDataByKey(key) {
+        if (key === 'early') return routeData_early;
+        if (key === '04') return routeData_04;
+        if (key === '03') return routeData_03;
+        return null;
+    }
+
+    /* ============================================================
+       소요시간 합계 / 도착시간 계산
+    ============================================================ */
+
+    function getRouteTotalMinutes(routeData) {
+        if (!routeData || !routeData.length) return 0;
+        return routeData.reduce(function(sum, p) {
+            return sum + (Number(p.minutes) || 0);
+        }, 0);
+    }
+
+    function addMinutesToTime(timeText, addMinutes) {
+        const match = String(timeText).match(/^(\d{1,2}):(\d{2})/);
+        if (!match) return '-';
+
+        let total = Number(match[1]) * 60 + Number(match[2]) + Number(addMinutes || 0);
+        total = ((total % 1440) + 1440) % 1440;
+
+        const h = Math.floor(total / 60);
+        const m = total % 60;
+
+        return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+    }
+
+    // "출발지(T2 차고지)" → "T2 차고지", "제2물류단지" → "제2물류단지"
+    function getStationShortName(title) {
+        const m = String(title || '').match(/^[^(]*\(([^)]+)\)\s*$/);
+        return (m ? m[1] : String(title || '')).trim();
+    }
+
+    function getRouteStartName(routeData) {
+        if (!routeData || !routeData.length) return '-';
+        return getStationShortName(routeData[0].title);
+    }
+
+    function getRouteEndName(routeData) {
+        if (!routeData || !routeData.length) return '-';
+        return getStationShortName(routeData[routeData.length - 1].title);
+    }
+
+
+    function getRouteName(routeData) {
+    if (routeData === routeData_01) return "01 노선";
+    if (routeData === routeData_via) return "정비 경유";
+    if (routeData === routeData_early) return "장기 경유";
+    if (routeData === routeData_04) return "04 노선";
+    if (routeData === routeData_03) return "03 노선";
+    if (routeData === routeData_05) return "05 노선";
+    return "노선";
+}
+
+
+    /* ============================================================
+       출발시간 목록 생성
+    ============================================================ */
+
+    function getCurrentSchedule() {
+    const route = document.getElementById('routeSelect').value;
+    const number = departureNumberSelect.value;
+
+    if (route === '05') {
+        const dayType = document.getElementById('dayType').value;
+        return dayType === 'holiday'
+            ? departureSchedules_05_holiday[number]
+            : departureSchedules_05_workday[number];
+    }
+
+    if (route === '04') return departureSchedules_04[number];
+    if (route === '03') return departureSchedules_03[number];
+    if (route === '01') return departureSchedules_01[number];
+    return departureSchedules_02[number];
+}
+
+function updateDepartureNumbers() {
+    const route = document.getElementById('routeSelect').value;
+
+    departureNumberSelect.innerHTML = '';
+
+    let schedules = {};
+    if (route === '05') {
+        const dayType = document.getElementById('dayType').value;
+        schedules = dayType === 'holiday'
+            ? departureSchedules_05_holiday
+            : departureSchedules_05_workday;
+    } else if (route === '04') {
+        schedules = departureSchedules_04;
+    } else if (route === '03') {
+        schedules = departureSchedules_03;
+    } else if (route === '01') {
+        schedules = departureSchedules_01;
+    } else {
+        schedules = departureSchedules_02;
+    }
+
+    Object.keys(schedules).forEach(function(number) {
+        const option = document.createElement('option');
+        option.value = number;
+        option.textContent = number;
+        departureNumberSelect.appendChild(option);
+    });
+
+    const savedNumber = localStorage.getItem('airportbus_' + route + '_number');
+
+    if (savedNumber && schedules[savedNumber]) {
+        departureNumberSelect.value = savedNumber;
+    } else {
+        departureNumberSelect.selectedIndex = 0;
+    }
+
+    updateDepartureTimes();
+}
+
+function updateDepartureTimes() {
+    departureTimeSelect.innerHTML = '';
+
+    const schedules = getCurrentSchedule();
+
+    if (!schedules) return;
+
+    schedules.forEach(function(time) {
+        const option = document.createElement('option');
+
+        const timeOnly =
+            String(time).match(/^\d{1,2}:\d{2}/)?.[0] || String(time);
+
+        option.value = timeOnly;
+        option.textContent = time;
+
+        departureTimeSelect.appendChild(option);
+    });
+
+    const nextTime = getNextDepartureTime(schedules);
+
+    if (nextTime) {
+        departureTimeSelect.value = nextTime;
+    } else {
+        departureTimeSelect.selectedIndex = 0;
+    }
+
+    onDepartureConfigChange();
+}
+
+
+    /* ============================================================
+       현재 시간 이후 가장 가까운 출발시간 찾기
+       ============================================================ */
+    function getNextDepartureTime(schedules) {
+        if (!schedules || schedules.length === 0) return null;
+
+        const now = new Date();
+        const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+        let nextTime = null;
+        let nextMinutes = Infinity;
+
+        schedules.forEach(function(timeText) {
+
+            const match = String(timeText).match(/^(\d{1,2}):(\d{2})/);
+
+            if (!match) return;
+
+            const hour = Number(match[1]);
+            const minute = Number(match[2]);
+
+            const scheduleMinutes = hour * 60 + minute;
+
+            // 현재 시각보다 큰 시간 중 가장 작은 시간 선택
+            if (
+                scheduleMinutes > currentMinutes &&
+                scheduleMinutes < nextMinutes
+            ) {
+                nextMinutes = scheduleMinutes;
+
+                // ★ option.value와 동일하게 시간 부분만 반환
+                nextTime =
+                    `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+            }
+        });
+
+        return nextTime;
+    }
+
+
+    /* ============================================================
+       출발번호 + 시간 변경
+    ============================================================ */
+
+    /* 특정 노선(route)의 특정 회차(schedules[departureIndex], 시각 selectedTime)에
+       실제로 배정되는 routeData를 계산한다 (부수효과 없음 - 전역 상태를 바꾸지 않음) */
+    function resolveRouteDataForDeparture(route, schedules, departureIndex, selectedTime) {
+
+        if (route === '01') {
+            return routeData_01;
+        }
+
+        if (route === '02') {
+            const [h, m] = selectedTime.split(':').map(Number);
+            const total = h * 60 + m;
+
+            const isVia =
+                (total >= 6 * 60 + 41 && total <= 18 * 60 + 38) ||
+                (total >= 0 && total <= 4 * 60);
+
+            return isVia ? routeData_via : routeData_02;
+        }
+
+        if (route === '03' || route === '04') {
+
+            const label = getScheduleLabel(schedules[departureIndex]);
+            const assignTable = (route === '03') ? ROUTE_ASSIGN_03 : ROUTE_ASSIGN_04;
+
+            let picked = getRouteDataByKey(assignTable[label]);
+
+            if (!picked) {
+                // 배정표에 없는 회차는 기본값으로 처리
+                picked = (route === '03') ? routeData_03 : routeData_04;
+            }
+
+            return picked;
+        }
+
+        if (route === '05') {
+            return routeData_05;
+        }
+
+        return null;
+    }
+
+
+    function onDepartureConfigChange() {
+    const route = document.getElementById('routeSelect').value;
+    const number = departureNumberSelect.value;
+    const selectedTime = departureTimeSelect.value;
+    const schedules = getCurrentSchedule();
+
+    if (!schedules || !selectedTime) return;
+
+    const departureIndex = schedules.findIndex(function(time) {
+        const match = String(time).match(/^(\d{1,2}):(\d{2})/);
+        if (!match) return false;
+
+        const hour = String(match[1]).padStart(2, '0');
+        const minute = match[2];
+        return `${hour}:${minute}` === selectedTime;
+    });
+
+    if (departureIndex === -1) return;
+
+    const resolved =
+        resolveRouteDataForDeparture(route, schedules, departureIndex, selectedTime);
+
+    if (resolved) {
+        activeRouteData = resolved;
+    }
+
+    localStorage.setItem('airportbus_route', route);
+    localStorage.setItem('airportbus_' + route + '_number', number);
+
+    const totalMinutes = getRouteTotalMinutes(activeRouteData);
+    const arrivalTime = addMinutesToTime(selectedTime, totalMinutes);
+    const startName = getRouteStartName(activeRouteData);
+    const endName = getRouteEndName(activeRouteData);
+
+    routeInfo.textContent =
+        `${route}번 / ${number} / ${selectedTime} 출발(${startName}) / ${getRouteName(activeRouteData)} / ${arrivalTime} 도착(${endName})`;
+
+    renderRoute();
+
+    lastArrivedAnnouncementIndex = -1;
+    lastNextAnnouncementIndex = -1;
+    previousDisplayedStationIndex = -1;
+
+    updateScheduleResult();
+}
+
+
+    document.getElementById('routeSelect').addEventListener('change', function() {
+    const route = this.value;
+
+    document.getElementById('dayType').style.display =
+        route === '05' ? '' : 'none';
+
+    updateDepartureNumbers();
+});
+
+document.getElementById('dayType').addEventListener('change', function() {
+    if (document.getElementById('routeSelect').value === '05') {
+        localStorage.setItem('airportbus_05_dayType', this.value);
+        updateDepartureNumbers();
+    }
+});
+
+departureNumberSelect.addEventListener('change', function() {
+    updateDepartureTimes();
+});
+
+departureTimeSelect.addEventListener('change', function() {
+    onDepartureConfigChange();
+});
+
+
+    /* ============================================================
+       노선 그리기
+    ============================================================ */
+
+    function renderRoute() {
+
+        /* 기존 Routing Machine 제거 */
+        routeSegments.forEach(function(segment) {
+            try {
+                map.removeControl(segment);
+            } catch (e) {}
+        });
+        routeSegments = [];
+
+        /* 기존 정류장 마커 제거 */
+        stationMarkers.forEach(function(marker) {
+            map.removeLayer(marker);
+        });
+        stationMarkers = [];
+
+        /* 실제 OSRM geometry 초기화 */
+        osrmRouteGeometries = [];
+
+        /* 노선이 바뀌면 맵매칭 상태도 초기화 */
+        routePath = [];
+        stationProgress = [];
+        stationTriggerDistances = [];
+        realStationIndexes = [];
+        matchedProgress = null;
+        matchedPoint = null;
+        matchedRouteIndex = 0;
+        lastMatchTimestamp = 0;
+        offRouteCount = 0;
+
+        /* 정류장 표시 */
+        activeRouteData.forEach(function(point) {
+            if (point.title === "경로지정좌표") {
+                return;
+            }
+
+            const marker = L.marker(
+                [point.lat, point.lng],
+                { icon: stationIcon }
+            ).addTo(map);
+
+            marker.bindTooltip(
+                point.title,
+                {
+                    permanent: true,
+                    direction: 'top',
+                    offset: [0, -5],
+                    className: 'station-label'
+                }
+            );
+
+            stationMarkers.push(marker);
+        });
+
+        /* routeData의 각 연속 지점을 OSRM 자동차도로로 연결
+           - 좌표 간 직선 연결 없음
+           - 지도에는 Routing Machine이 받은 실제 OSM 도로선만 표시 */
+        for (let i = 0; i < activeRouteData.length - 1; i++) {
+            const from = activeRouteData[i];
+            const to = activeRouteData[i + 1];
+            const lineColor = to.routeType === "빨간색" ? "#dc2626" : "#0052cc";
+
+            const control = L.Routing.control({
+                waypoints: [
+                    L.latLng(from.lat, from.lng),
+                    L.latLng(to.lat, to.lng)
+                ],
+
+                router: L.Routing.osrmv1({
+                    serviceUrl: 'https://router.project-osrm.org/route/v1'
+                }),
+
+                lineOptions: {
+                    styles: [{
+                        color: lineColor,
+                        opacity: 0.9,
+                        weight: 6
+                    }],
+                    addWaypoints: false
+                },
+
+                addWaypoints: false,
+                draggableWaypoints: false,
+                routeWhileDragging: false,
+                fitSelectedRoutes: false,
+                showAlternatives: false,
+
+                createMarker: function() {
+                    return null;
+                }
+            });
+
+            control.on('routesfound', function(e) {
+                if (e.routes && e.routes[0] && e.routes[0].coordinates) {
+                    osrmRouteGeometries[i] = e.routes[0].coordinates.map(function(p) {
+                        return { lat: p.lat, lng: p.lng };
+                    });
+
+                    /* 실제 도로선이 도착할 때마다 맵매칭용 경로를 다시 만든다 */
+                    rebuildRoutePath();
+
+                    updateScheduleResult();
+                }
+            });
+
+            control.on('routingerror', function() {
+                console.warn('OSRM 경로 계산 실패: 구간 ' + i);
+            });
+
+            control.addTo(map);
+            routeSegments.push(control);
+        }
+
+        /* OSRM 응답 전에도 동작하도록 직선 기반으로 먼저 구성 */
+        rebuildRoutePath();
+    }
+
+
+    /* ============================================================
+       시간 표시
+    ============================================================ */
+
+    /* ============================================================
+       출발시간 음성 알람
+       - 시간 선택값과 무관하게 현재 차량번호의 모든 시간표 감시
+       - 차량번호를 변경하면 변경된 차량의 시간표를 감시
+       ============================================================ */
+
+    const departureAlarmButton =
+        document.getElementById('departureAlarmButton');
+
+    let departureAlarmEnabled = false;
+
+
+    function speakDepartureAlarm(timeText) {
+
+        const match =
+            String(timeText).match(/^(\d{1,2}):(\d{2})/);
+
+        if (!match) return;
+
+        const hour = Number(match[1]);
+        const minute = Number(match[2]);
+
+        const text =
+            `${String(hour).padStart(2, '0')}시 ${String(minute).padStart(2, '0')}분 출발 시간 입니다.`;
+
+        window.speechSynthesis.cancel();
+
+        const utterance =
+            new SpeechSynthesisUtterance(text);
+
+        utterance.lang = 'ko-KR';
+        utterance.rate = 0.85;
+        utterance.pitch = 1.0;
+        utterance.volume = 1.0;
+
+        window.speechSynthesis.speak(utterance);
+    }
+
+
+    function checkDepartureAlarm() {
+    if (!departureAlarmEnabled) return;
+
+    const schedules = getCurrentSchedule();
+    if (!schedules) return;
+
+    const now = new Date();
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+    const currentSecond = now.getSeconds();
+
+    if (currentSecond !== 0) return;
+
+    const currentTime =
+        `${String(currentHour).padStart(2, '0')}:${String(currentMinute).padStart(2, '0')}`;
+
+    const matched = schedules.find(function(time) {
+        const timeOnly =
+            String(time).match(/^(\d{1,2}:\d{2})/)?.[1];
+
+        if (!timeOnly) return false;
+
+        const [hour, minute] = timeOnly.split(':').map(Number);
+
+        // 24:00 표기는 실제 시계의 00:00과 비교
+        const normalizedTime =
+            `${String(hour % 24).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+
+        return normalizedTime === currentTime;
+    });
+
+    if (matched) {
+        // 실제 출발시간이 되면 시간 드롭박스를 해당 출발시간으로 갱신
+        departureTimeSelect.value = matched;
+
+        // 기존 출발시간 변경 로직과 동일하게 화면/노선 설정 갱신
+        onDepartureConfigChange();
+
+        // 출발 알람
+        speakDepartureAlarm(matched);
+    }
+}
+
+
+    departureAlarmButton.addEventListener('click', function() {
+
+        departureAlarmEnabled = !departureAlarmEnabled;
+
+        if (departureAlarmEnabled) {
+
+            departureAlarmButton.textContent = '🔊 출발 알람 ON';
+            departureAlarmButton.classList.add('on');
+
+            // 모바일 브라우저에서 TTS를 사용자 조작으로 먼저 활성화
+            const testUtterance =
+                new SpeechSynthesisUtterance('출발 알람을 켰습니다.');
+
+            testUtterance.lang = 'ko-KR';
+            testUtterance.rate = 0.85;
+            testUtterance.pitch = 1.0;
+            testUtterance.volume = 1.0;
+
+            window.speechSynthesis.cancel();
+            window.speechSynthesis.speak(testUtterance);
+
+        } else {
+
+            departureAlarmButton.textContent = '🔊 출발 알람 OFF';
+            departureAlarmButton.classList.remove('on');
+
+            window.speechSynthesis.cancel();
+        }
+
+
+            /*
+             * ON / OFF 상태 저장
+             */
+
+            localStorage.setItem(
+                'airportbus_departure_alarm',
+                departureAlarmEnabled
+                    ? 'on'
+                    : 'off'
+            );
+
+    });
+
+
+    // 1초마다 출발시간 확인
+    setInterval(checkDepartureAlarm, 1000);
+
+
+    /* ============================================================
+       GPS 자동 출발시간 선택
+       - 시간 선택(select)은 항상 자유롭게 선택 가능 (이전 스케줄 확인 등)
+       - 단, "현재위치 추적 모드"가 켜져 있고(gpsFollowMode),
+         GPS 현재위치가 화면에 그려진 노선에 실제로 매칭되어
+         "운행 중"으로 판단되는 동안에만, 출발 리스트의 각 출발시간과
+         그 도착시간(총 소요시간 반영) 구간을 비교하여 현재시각이
+         포함되는 출발시간을 자동으로 선택한다.
+       - 추적 모드가 꺼져 있으면(대기 중 다른 스케줄 조회 등)
+         GPS가 노선에 붙어 있어도 자동으로 값을 바꾸지 않는다.
+       ============================================================ */
+
+    // "HH:MM" 텍스트에서 시:분을 분단위 정수로 변환
+    function parseTimeToMinutes(timeText) {
+        const match = String(timeText).match(/^(\d{1,2}):(\d{2})/);
+        if (!match) return null;
+        return Number(match[1]) * 60 + Number(match[2]);
+    }
+
+    // now(분)가 [depMinutes, arriveMinutes) 구간에 포함되는지
+    // 자정을 넘기는 심야 노선까지 고려해서 판단
+    function isMinutesWithinWindow(nowMinutes, depMinutes, arriveMinutes) {
+
+        if (nowMinutes >= depMinutes && nowMinutes < arriveMinutes) {
+            return true;
+        }
+
+        // 출발이 자정 근처(심야)라 now가 다음날 새벽으로 넘어간 경우 보정
+        if (
+            nowMinutes + 1440 >= depMinutes &&
+            nowMinutes + 1440 < arriveMinutes
+        ) {
+            return true;
+        }
+
+        return false;
+    }
+
+    // schedules 안에서 현재시각(nowMinutes)이 [출발~도착] 구간에 속하는
+    // 출발시간의 인덱스를 찾는다. 없으면 -1
+    function findActiveDepartureIndex(route, schedules, nowMinutes) {
+
+        if (!schedules || !schedules.length) return -1;
+
+        for (let i = 0; i < schedules.length; i++) {
+
+            const depMinutes = parseTimeToMinutes(schedules[i]);
+            if (depMinutes === null) continue;
+
+            const timeOnly =
+                `${String(Math.floor(depMinutes / 60)).padStart(2, '0')}:` +
+                `${String(depMinutes % 60).padStart(2, '0')}`;
+
+            const routeDataForThis =
+                resolveRouteDataForDeparture(route, schedules, i, timeOnly);
+
+            if (!routeDataForThis) continue;
+
+            const totalMinutes = getRouteTotalMinutes(routeDataForThis);
+            const arriveMinutes = depMinutes + totalMinutes;
+
+            if (isMinutesWithinWindow(nowMinutes, depMinutes, arriveMinutes)) {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    function autoSelectDepartureTimeByGps() {
+
+        // 현재위치 추적 모드일 때만 자동 선택
+        // (추적 OFF 상태에서는 사용자가 고른 출발시간을 그대로 유지)
+        if (!gpsFollowMode) return;
+
+        // GPS가 화면의 노선에 실제로 매칭되어 있을 때만 자동 선택
+        if (matchedProgress === null || !lastGpsPosition) return;
+
+        const route = document.getElementById('routeSelect').value;
+        const schedules = getCurrentSchedule();
+
+        if (!schedules || !schedules.length) return;
+
+        const now = new Date();
+        const nowMinutes = now.getHours() * 60 + now.getMinutes();
+
+        const activeIndex =
+            findActiveDepartureIndex(route, schedules, nowMinutes);
+
+        if (activeIndex === -1) return;
+
+        const depMinutes = parseTimeToMinutes(schedules[activeIndex]);
+        if (depMinutes === null) return;
+
+        const activeTime =
+            `${String(Math.floor(depMinutes / 60)).padStart(2, '0')}:` +
+            `${String(depMinutes % 60).padStart(2, '0')}`;
+
+        // 이미 해당 출발시간이 선택되어 있으면 아무 것도 하지 않음
+        if (departureTimeSelect.value === activeTime) return;
+
+        departureTimeSelect.value = activeTime;
+        onDepartureConfigChange();
+    }
+
+    // 1초마다 GPS 매칭 여부를 확인하여 필요할 때만 출발시간 자동 보정
+    setInterval(autoSelectDepartureTimeByGps, 1000);
+
+
+    function updateCurrentTime() {
+
+        const now = new Date();
+
+        const h =
+            String(now.getHours()).padStart(2, '0');
+
+        const m =
+            String(now.getMinutes()).padStart(2, '0');
+
+        const s =
+            String(now.getSeconds()).padStart(2, '0');
+
+        document.getElementById(
+            'currentTime'
+        ).textContent =
+            `${h}:${m}:${s}`;
+
+    }
+
+    updateCurrentTime();
+
+    setInterval(
+        updateCurrentTime,
+        1000
+    );
+
+
+    /* ============================================================
+       GPS
+       - navigator.geolocation으로 현재 위치 직접 수신
+       - 진행방향 화살표 표시
+       - GPS heading 우선, 없으면 실제 이동좌표로 방향 계산
+       - 회색 이동 궤적 기록 없음
+       - 현재 위치 버튼으로 지도 중심 이동
+    ============================================================ */
+
+    let currentLocationMarker = null;
+    let gpsWatchId = null;
+    let gpsFollowMode = false;
+
+    const gpsLocateButton =
+        document.getElementById('gpsLocateButton');
+
+    function calculateBearing(a, b) {
+
+        const lat1 =
+            a.lat * Math.PI / 180;
+
+        const lat2 =
+            b.lat * Math.PI / 180;
+
+        const dLon =
+            (b.lng - a.lng) * Math.PI / 180;
+
+        const y =
+            Math.sin(dLon) * Math.cos(lat2);
+
+        const x =
+            Math.cos(lat1) * Math.sin(lat2) -
+            Math.sin(lat1) * Math.cos(lat2) *
+            Math.cos(dLon);
+
+        return (
+            Math.atan2(y, x) * 180 / Math.PI + 360
+        ) % 360;
+    }
+
+
+    function updateGpsArrow() {
+
+        if (!currentLocationMarker) {
+            return;
+        }
+
+        const element =
+            currentLocationMarker.getElement();
+
+        if (!element) {
+            return;
+        }
+
+        const arrow =
+            element.querySelector('.gps-arrow');
+
+        if (
+            arrow &&
+            Number.isFinite(currentGpsHeading)
+        ) {
+
+            arrow.style.transform =
+                'rotate(' +
+                currentGpsHeading +
+                'deg)';
+
+        }
+
+    }
+
+
+    function processGpsPosition(position) {
+
+        const coords = position.coords;
+
+        const timestamp =
+            position.timestamp || Date.now();
+
+        const latlng =
+            L.latLng(
+                coords.latitude,
+                coords.longitude
+            );
+
+
+        /* ------------------------------------------------------------
+           1) 진행방향 결정
+              - 스마트폰 GPS heading 우선
+              - heading이 없으면 이전 GPS 좌표에서 이동방향 계산
+           ------------------------------------------------------------ */
+
+        let heading = null;
+
+        if (
+            Number.isFinite(coords.heading) &&
+            coords.speed !== null &&
+            coords.speed !== undefined &&
+            coords.speed > 0.5
+        ) {
+            heading = coords.heading;
+        }
+
+        if (heading === null && rawGpsPosition) {
+
+            const movedMeters =
+                metersBetween(rawGpsPosition, latlng);
+
+            /* 정차 중 미세한 흔들림은 방향으로 보지 않음 */
+            if (movedMeters >= 5) {
+                heading = calculateBearing(rawGpsPosition, latlng);
+            }
+        }
+
+        /* 한 번의 GPS 튐으로 180도 뒤집히는 것은 무시 */
+        updateStableHeading(heading);
+
+
+        previousRawGpsPosition = rawGpsPosition;
+        rawGpsPosition = latlng;
+
+
+        /* ------------------------------------------------------------
+           2) GPS를 실제 노선(OSRM 도로선)에 붙임
+              - 원본 GPS를 그대로 정류장 판단에 사용하지 않음
+              - 반대 방향 도로는 강하게 제외
+              - 크게 튀면 기존 진행 위치를 유지
+           ------------------------------------------------------------ */
+
+        const matched =
+            matchGpsToRoute(
+                latlng,
+                coords.accuracy,
+                timestamp
+            );
+
+        if (matched) {
+
+            matchedProgress = matched.progress;
+            matchedPoint = L.latLng(matched.lat, matched.lng);
+            matchedRouteIndex = matched.routeIndex;
+            lastMatchTimestamp = timestamp;
+
+            /* 노선 진행방향으로 진행방향을 계속 안정화 */
+            if (Number.isFinite(stableHeading)) {
+
+                if (angleDifference(stableHeading, matched.bearing) < 70) {
+                    stableHeading =
+                        blendAngle(stableHeading, matched.bearing, 0.3);
+                }
+
+            } else {
+                stableHeading = matched.bearing;
+            }
+        }
+
+        /* 보정된 위치가 있으면 그것을 사용 (노선에 붙은 마커) */
+        lastGpsPosition = matchedPoint || latlng;
+
+        currentGpsHeading =
+            Number.isFinite(stableHeading)
+                ? stableHeading
+                : null;
+
+
+        /*
+         * GPS 마커 생성/이동
+         */
+        if (!currentLocationMarker) {
+
+            currentLocationMarker =
+                L.marker(
+                    lastGpsPosition,
+                    {
+                        icon: gpsIcon,
+                        zIndexOffset: 1000
+                    }
+                ).addTo(map);
+
+        } else {
+
+            currentLocationMarker
+                .setLatLng(lastGpsPosition);
+
+        }
+
+        /* 현재위치 추적 모드가 켜져 있을 때만 GPS를 따라 지도 중심 이동 */
+        if (gpsFollowMode) {
+            map.setView(
+                lastGpsPosition,
+                map.getZoom(),
+                { animate: false }
+            );
+        }
+
+        updateGpsArrow();
+        updateScheduleResult();
+
+    }
+
+
+    function handleGpsError(error) {
+
+        console.log(
+            'GPS 오류:',
+            error.message
+        );
+
+    }
+
+
+    /*
+     * GPS 감시 시작
+     */
+    if (
+        'geolocation' in navigator
+    ) {
+
+        gpsWatchId =
+            navigator.geolocation.watchPosition(
+                processGpsPosition,
+                handleGpsError,
+                {
+                    enableHighAccuracy: true,
+                    maximumAge: 1000,
+                    timeout: 15000
+                }
+            );
+
+    } else {
+
+        console.log(
+            '이 브라우저에서는 GPS를 지원하지 않습니다.'
+        );
+
+    }
+
+
+    /*
+     * 현재 위치 버튼 (ON/OFF 토글)
+     * - 꺼져 있을 때 누르면 현재 위치 추적 ON
+     * - 켜져 있을 때 누르면 현재 위치 추적 OFF
+     * - 추적 ON: GPS가 갱신될 때마다 지도 중심을 현재 위치로 이동
+     *            + 출발시간 자동 선택
+     * - 사용자가 지도를 드래그하면 추적 OFF
+     */
+    function setGpsFollowMode(enabled) {
+
+        gpsFollowMode = enabled;
+        gpsLocateButton.classList.toggle('following', enabled);
+
+        if (enabled && lastGpsPosition) {
+            map.setView(
+                lastGpsPosition,
+                Math.max(map.getZoom(), 16),
+                { animate: true }
+            );
+        }
+
+        /* 추적 모드를 켜는 즉시 현재 운행 중인 출발시간으로 맞춤 */
+        if (enabled) {
+            autoSelectDepartureTimeByGps();
+        }
+    }
+
+
+    gpsLocateButton.addEventListener(
+        'click',
+        function() {
+
+            /* 이미 추적 중이면 버튼을 눌러 추적 OFF (토글) */
+            if (gpsFollowMode) {
+                setGpsFollowMode(false);
+                return;
+            }
+
+            /* 추적 중이 아니면 현재 위치 추적 ON */
+            setGpsFollowMode(true);
+
+            if (lastGpsPosition) {
+                return;
+            }
+
+            if (!('geolocation' in navigator)) {
+
+                alert(
+                    '이 브라우저에서는 GPS를 사용할 수 없습니다.'
+                );
+
+                setGpsFollowMode(false);
+                return;
+            }
+
+            navigator.geolocation.getCurrentPosition(
+                function(position) {
+
+                    processGpsPosition(position);
+
+                    /* 위치를 받아오는 동안 사용자가 OFF 했다면 다시 켜지 않음 */
+                    if (gpsFollowMode) {
+                        setGpsFollowMode(true);
+                    }
+
+                },
+                function(error) {
+
+                    console.log(
+                        '현재 위치 요청 오류:',
+                        error.message
+                    );
+
+                    setGpsFollowMode(false);
+
+                    alert(
+                        '현재 위치를 가져올 수 없습니다.\n' +
+                        '브라우저의 위치 권한과 GPS가 켜져 있는지 확인해주세요.'
+                    );
+
+                },
+                {
+                    enableHighAccuracy: true,
+                    maximumAge: 0,
+                    timeout: 15000
+                }
+            );
+
+        }
+    );
+
+
+    /*
+     * 사용자가 지도를 직접 드래그하면 자동 추적 해제
+     * dragstart만 감지하므로 줌/버튼 조작에는 영향을 주지 않음
+     */
+    map.on('dragstart', function() {
+        if (gpsFollowMode) {
+            setGpsFollowMode(false);
+        }
+    });
+
+
+    /* ============================================================
+       지오메트리 / 각도 유틸
+    ============================================================ */
+
+    function metersBetween(a, b) {
+
+        const latScale = 111320;
+
+        const lonScale =
+            111320 * Math.cos(((a.lat + b.lat) / 2) * Math.PI / 180);
+
+        const dx = (a.lng - b.lng) * lonScale;
+        const dy = (a.lat - b.lat) * latScale;
+
+        return Math.hypot(dx, dy);
+    }
+
+
+    function getPointToSegmentInfo(p, a, b) {
+        const latScale = 111320;
+        const lonScale = 111320 * Math.cos(p.lat * Math.PI / 180);
+
+        const px = p.lng * lonScale;
+        const py = p.lat * latScale;
+        const ax = a.lng * lonScale;
+        const ay = a.lat * latScale;
+        const bx = b.lng * lonScale;
+        const by = b.lat * latScale;
+
+        const dx = bx - ax;
+        const dy = by - ay;
+        const len2 = dx * dx + dy * dy;
+
+        let t = 0;
+        if (len2 > 0) {
+            t = ((px - ax) * dx + (py - ay) * dy) / len2;
+            t = Math.max(0, Math.min(1, t));
+        }
+
+        const qx = ax + t * dx;
+        const qy = ay + t * dy;
+        const distance = Math.hypot(px - qx, py - qy);
+
+        const bearing = calculateBearing(
+            { lat: a.lat, lng: a.lng },
+            { lat: b.lat, lng: b.lng }
+        );
+
+        return { distance, t, bearing };
+    }
+
+
+    function angleDifference(a, b) {
+        let d = Math.abs(a - b) % 360;
+        return d > 180 ? 360 - d : d;
+    }
+
+
+    function normalizeAngle(a) {
+        return ((a % 360) + 360) % 360;
+    }
+
+
+    /* 두 방향을 최단 회전 방향으로 보간 */
+    function blendAngle(from, to, weight) {
+        const diff = ((to - from + 540) % 360) - 180;
+        return normalizeAngle(from + diff * weight);
+    }
+
+
+    /* ============================================================
+       진행방향 안정화
+       - 한 번의 GPS 튐으로 방향이 180도 가까이 뒤집히는 것을 무시
+       - 연속 2회 이상 같은 방향이 들어올 때만 반영
+    ============================================================ */
+
+    function updateStableHeading(rawHeading) {
+
+        if (!Number.isFinite(rawHeading)) {
+            return;
+        }
+
+        if (!Number.isFinite(stableHeading)) {
+            stableHeading = normalizeAngle(rawHeading);
+            headingFlipCount = 0;
+            return;
+        }
+
+        const diff =
+            angleDifference(stableHeading, rawHeading);
+
+        if (diff > 120) {
+
+            headingFlipCount++;
+
+            /* 첫 번째 역방향은 GPS 튐으로 보고 무시 */
+            if (headingFlipCount < 2) {
+                return;
+            }
+
+            stableHeading = normalizeAngle(rawHeading);
+            headingFlipCount = 0;
+            return;
+        }
+
+        headingFlipCount = 0;
+
+        stableHeading =
+            blendAngle(stableHeading, rawHeading, 0.6);
+    }
+
+
+    /* ============================================================
+       실제 노선(OSRM 도로선)을 하나의 경로로 연결
+       - 각 점에 노선 시작점부터의 누적거리(dist)를 기록
+       - 정류장별 누적거리(stationProgress)도 같이 계산
+    ============================================================ */
+
+    function isRealStation(point) {
+        return (
+            point &&
+            point.title !== '경로지정좌표' &&
+            Number(point.minutes) > 0
+        );
+    }
+
+
+    function rebuildRoutePath() {
+
+        if (!activeRouteData || activeRouteData.length < 2) {
+            return;
+        }
+
+        routePath = [];
+        stationProgress = new Array(activeRouteData.length).fill(0);
+
+        let cumulative = 0;
+
+        for (let i = 0; i < activeRouteData.length - 1; i++) {
+
+            const from = activeRouteData[i];
+            const to = activeRouteData[i + 1];
+
+            let geometry = osrmRouteGeometries[i];
+
+            /* OSRM 응답 전이거나 실패한 구간은 직선으로 임시 연결 */
+            if (!geometry || geometry.length < 2) {
+                geometry = [
+                    { lat: from.lat, lng: from.lng },
+                    { lat: to.lat, lng: to.lng }
+                ];
+            }
+
+            stationProgress[i] = cumulative;
+
+            for (let j = 0; j < geometry.length; j++) {
+
+                const point = geometry[j];
+
+                if (routePath.length === 0) {
+                    routePath.push({
+                        lat: point.lat,
+                        lng: point.lng,
+                        dist: 0,
+                        routeIndex: i
+                    });
+                    continue;
+                }
+
+                const last = routePath[routePath.length - 1];
+                const step = metersBetween(last, point);
+
+                if (step < 0.5) {
+                    continue;
+                }
+
+                cumulative += step;
+
+                routePath.push({
+                    lat: point.lat,
+                    lng: point.lng,
+                    dist: cumulative,
+                    routeIndex: i
+                });
+            }
+        }
+
+        stationProgress[activeRouteData.length - 1] = cumulative;
+        totalRouteLength = cumulative;
+
+        computeStationTriggerDistances();
+
+        /* 노선 길이가 바뀌었으므로 진행 위치는 새 경로 기준으로 다시 계산 */
+        matchedProgress = null;
+        offRouteCount = 0;
+
+        remapCurrentPosition();
+    }
+
+
+    /* ============================================================
+       정류장별 안내 기준거리
+       - 기본 : 30m
+       - 앞/뒤 정류장 간격이 좁으면 : 15m
+         (02번 장기탑승장3(남) ↔ 장기탑승장4(북) 처럼 40m 대 간격)
+        - 정류장별 예외(STATION_DISTANCE_OVERRIDES)가 있으면 그 값을 우선 사용
+    ============================================================ */
+
+    function computeStationTriggerDistances() {
+
+        stationTriggerDistances =
+            new Array(activeRouteData.length).fill(STATION_DISTANCE_DEFAULT);
+
+        realStationIndexes = [];
+
+        for (let i = 0; i < activeRouteData.length; i++) {
+            if (isRealStation(activeRouteData[i])) {
+                realStationIndexes.push(i);
+            }
+        }
+
+        for (let k = 0; k < realStationIndexes.length; k++) {
+
+            const index = realStationIndexes[k];
+
+            let gap = Infinity;
+
+            if (k > 0) {
+                gap = Math.min(
+                    gap,
+                    stationProgress[index] -
+                    stationProgress[realStationIndexes[k - 1]]
+                );
+            }
+
+            if (k < realStationIndexes.length - 1) {
+                gap = Math.min(
+                    gap,
+                    stationProgress[realStationIndexes[k + 1]] -
+                    stationProgress[index]
+                );
+            }
+
+            let trigger = STATION_DISTANCE_DEFAULT;
+
+            if (gap < STATION_CLOSE_GAP) {
+                trigger = STATION_DISTANCE_CLOSE;
+            }
+
+            /* 정류장별 예외값이 있으면 우선 적용 */
+            const overrideTable =
+                STATION_DISTANCE_OVERRIDES.get(activeRouteData);
+
+            if (
+                overrideTable &&
+                Number.isFinite(overrideTable[activeRouteData[index].title])
+            ) {
+                trigger = overrideTable[activeRouteData[index].title];
+            }
+
+            /* 간격이 아주 좁으면 안내가 겹치지 않도록 더 줄임 */
+            if (Number.isFinite(gap)) {
+                trigger = Math.min(trigger, Math.max(8, gap / 3));
+            }
+
+            stationTriggerDistances[index] = trigger;
+        }
+    }
+
+
+    function getStationTriggerDistance(index) {
+
+        const value = stationTriggerDistances[index];
+
+        return Number.isFinite(value)
+            ? value
+            : STATION_DISTANCE_DEFAULT;
+    }
+
+
+    /* ============================================================
+       GPS → 노선 맵매칭
+       - 실제 도로선에서 가장 가까운 지점을 찾음
+       - GPS 진행방향과 노선 진행방향이 맞는 선분 우선
+       - 반대 방향 도로(110도 초과)는 후보에서 제외
+       - 뒤로 튀거나 비현실적으로 앞으로 점프하는 후보는 감점
+    ============================================================ */
+
+    function matchGpsToRoute(gps, accuracy, timestamp) {
+
+        if (routePath.length < 2) {
+            return null;
+        }
+
+        /* 직전 매칭 이후 경과시간으로 이동 가능 거리 추정 */
+        let forwardLimit = Infinity;
+
+        if (matchedProgress !== null && lastMatchTimestamp) {
+
+            const elapsed =
+                Math.min(
+                    30,
+                    Math.max(0.5, (timestamp - lastMatchTimestamp) / 1000)
+                );
+
+            /* 최대 약 140km/h + 여유 */
+            forwardLimit = 40 * elapsed + 80;
+        }
+
+        /* GPS 정확도에 따라 노선에 붙일 수 있는 최대 거리 */
+        const snapLimit =
+            Math.min(
+                90,
+                Math.max(40, (Number(accuracy) || 20) + 30)
+            );
+
+        let best = null;
+
+        for (let j = 0; j < routePath.length - 1; j++) {
+
+            const a = routePath[j];
+            const b = routePath[j + 1];
+
+            const info = getPointToSegmentInfo(gps, a, b);
+
+            if (info.distance > 200) {
+                continue;
+            }
+
+            const segmentLength = b.dist - a.dist;
+            const progress = a.dist + info.t * segmentLength;
+
+            let score = info.distance;
+
+            /* 진행방향이 맞는 선분을 우선 선택 / 반대 방향은 제외 */
+            if (Number.isFinite(stableHeading)) {
+
+                const diff =
+                    angleDifference(stableHeading, info.bearing);
+
+                if (diff > 110) {
+                    continue;
+                }
+
+                score += diff * 1.6;
+            }
+
+            /* 기존 진행 위치와의 연속성 */
+            if (matchedProgress !== null) {
+
+                const delta = progress - matchedProgress;
+
+                if (delta < -15) {
+                    /* 뒤로 튀는 후보 강하게 감점 */
+                    score += Math.min(-delta - 15, 400) * 2.0;
+
+                } else if (delta > forwardLimit) {
+                    /* 옆 도로로 건너뛰는 후보 감점 */
+                    score += (delta - forwardLimit) * 2.0;
+
+                } else {
+                    score += Math.abs(delta) * 0.05;
+                }
+            }
+
+            if (!best || score < best.score) {
+
+                best = {
+                    lat: a.lat + (b.lat - a.lat) * info.t,
+                    lng: a.lng + (b.lng - a.lng) * info.t,
+                    progress: progress,
+                    distance: info.distance,
+                    bearing: info.bearing,
+                    routeIndex: a.routeIndex,
+                    score: score
+                };
+            }
+        }
+
+        if (!best) {
+            offRouteCount++;
+            return null;
+        }
+
+        /* 노선에서 너무 멀면 : 기존 진행 위치를 유지
+           단, 계속 멀면(실제로 노선을 벗어난 경우) 새 위치를 받아들임 */
+        if (best.distance > snapLimit) {
+
+            offRouteCount++;
+
+            if (matchedProgress !== null && offRouteCount < 5) {
+                return null;
+            }
+
+        } else {
+            offRouteCount = 0;
+        }
+
+        return best;
+    }
+
+
+    /* 노선이 갱신되었을 때 현재 GPS를 다시 노선에 붙임 */
+    function remapCurrentPosition() {
+
+        if (!rawGpsPosition || routePath.length < 2) {
+            return;
+        }
+
+        const matched =
+            matchGpsToRoute(rawGpsPosition, 20, Date.now());
+
+        if (!matched) {
+            return;
+        }
+
+        matchedProgress = matched.progress;
+        matchedPoint = L.latLng(matched.lat, matched.lng);
+        matchedRouteIndex = matched.routeIndex;
+        lastMatchTimestamp = Date.now();
+
+        lastGpsPosition = matchedPoint;
+
+        if (currentLocationMarker) {
+            currentLocationMarker.setLatLng(matchedPoint);
+        }
+    }
+
+
+    /* ============================================================
+       이번 정류장 / 다음 정류장
+       - 노선 위 진행거리(matchedProgress) 기준
+       - 정류장을 기준거리(30m / 15m)만큼 지나면 다음 정류장으로 전환
+    ============================================================ */
+
+    function getCurrentStationIndex() {
+
+        if (matchedProgress === null || realStationIndexes.length === 0) {
+            return -1;
+        }
+
+        for (let k = 0; k < realStationIndexes.length; k++) {
+
+            const index = realStationIndexes[k];
+
+            const departDistance =
+                getStationTriggerDistance(index);
+
+            if (matchedProgress <= stationProgress[index] + departDistance) {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+
+    function getFollowingStationIndex(currentIndex) {
+
+        const position = realStationIndexes.indexOf(currentIndex);
+
+        if (position === -1 || position + 1 >= realStationIndexes.length) {
+            return -1;
+        }
+
+        return realStationIndexes[position + 1];
+    }
+
+
+        /* ============================================================
+       다음 정류장 예정시간
+    ============================================================ */
+
+    /* ============================================================
+       정류장 안내방송
+       - 안내방송 ON일 때만 동작
+       - 정류장 도착 30m 전 : "이번 정류장은 00 입니다."
+       - 정류장 출발 30m 후 : "다음 정류장은 00 입니다."
+       - 정류장 간격이 좁은 곳(02번 장기탑승장3-4 등)은 15m 기준
+       - 같은 정류장에 대해서는 한 번만 방송
+       - 판단 기준은 보정된(노선에 붙인) 위치의 진행거리
+       ============================================================ */
+
+    const stationAnnouncementButton =
+        document.getElementById('stationAnnouncementButton');
+
+    let stationAnnouncementEnabled = false;
+
+    // 마지막으로 "이번 정류장" 방송을 한 정류장
+    let lastArrivedAnnouncementIndex = -1;
+
+    // 마지막으로 "다음 정류장" 방송을 한 정류장
+    let lastNextAnnouncementIndex = -1;
+
+    // 직전 GPS에서 판단한 정류장
+    let previousDisplayedStationIndex = -1;
+
+
+    function speakStationAnnouncement(text) {
+
+        if (!stationAnnouncementEnabled) return;
+
+        const utterance =
+            new SpeechSynthesisUtterance(text);
+
+        utterance.lang = 'ko-KR';
+        utterance.rate = 0.85;
+        utterance.pitch = 1.0;
+        utterance.volume = 1.0;
+
+        // 안내방송끼리 겹치지 않도록 이전 방송을 취소
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(utterance);
+    }
+
+
+    stationAnnouncementButton.addEventListener('click', function() {
+
+        stationAnnouncementEnabled =
+            !stationAnnouncementEnabled;
+
+        if (stationAnnouncementEnabled) {
+
+            stationAnnouncementButton.textContent =
+                '🔊 안내방송 ON';
+
+            stationAnnouncementButton.classList.add('on');
+
+            // 모바일 브라우저의 TTS를 사용자 조작으로 먼저 활성화
+            const testUtterance =
+                new SpeechSynthesisUtterance('안내방송을 켰습니다.');
+
+            testUtterance.lang = 'ko-KR';
+            testUtterance.rate = 0.85;
+            testUtterance.pitch = 1.0;
+            testUtterance.volume = 1.0;
+
+            window.speechSynthesis.cancel();
+            window.speechSynthesis.speak(testUtterance);
+
+        } else {
+
+            stationAnnouncementButton.textContent =
+                '🔊 안내방송 OFF';
+
+            stationAnnouncementButton.classList.remove('on');
+
+            window.speechSynthesis.cancel();
+        }
+
+
+            /*
+             * ON / OFF 상태 저장
+             */
+
+            localStorage.setItem(
+                'airportbus_station_announcement',
+                stationAnnouncementEnabled
+                    ? 'on'
+                    : 'off'
+            );
+    });
+
+
+    /* 해당 정류장의 예정 도착시각 */
+    function getStationArrivalText(index) {
+
+        const departureTime = departureTimeSelect.value;
+
+        if (!departureTime || index < 0) {
+            return '';
+        }
+
+        let totalMinutes = 0;
+
+        for (let i = 1; i <= index; i++) {
+            totalMinutes += Number(activeRouteData[i].minutes || 0);
+        }
+
+        const [hour, minute] =
+            departureTime.split(':').map(Number);
+
+        const arrival = new Date();
+
+        arrival.setHours(hour, minute, 0, 0);
+        arrival.setMinutes(arrival.getMinutes() + totalMinutes);
+
+        const arrivalHour =
+            String(arrival.getHours()).padStart(2, '0');
+
+        const arrivalMinute =
+            String(arrival.getMinutes()).padStart(2, '0');
+
+        return arrivalHour + ':' + arrivalMinute;
+    }
+
+
+    /* 음성 안내용 도착시각 (예: "15시 30분", 정각이면 "9시 정각")
+       - 출발시각이 선택되지 않아 시간이 없으면 빈 문자열 */
+    function getStationArrivalSpeech(index) {
+
+        const timeText = getStationArrivalText(index);
+
+        if (!timeText) {
+            return '';
+        }
+
+        const [hour, minute] =
+            timeText.split(':').map(Number);
+
+        return minute === 0
+            ? `${hour}시 정각`
+            : `${hour}시 ${minute}분`;
+    }
+
+
+    /* ------------------------------------------------------------
+       안내방송 처리
+       - 도착 전 (기준거리) : "이번 정류장은 00 입니다."
+       - 출발 후 (기준거리) : "다음 정류장은 00 입니다."
+         → 출발 후 기준거리를 지나면 이번 정류장이 다음 정류장으로
+           바뀌므로, 정류장이 바뀌는 순간 방송한다.
+       ------------------------------------------------------------ */
+
+    function handleStationAnnouncement(currentIndex) {
+
+        const station = activeRouteData[currentIndex];
+
+        if (!station) {
+            return;
+        }
+
+        /* 정류장이 바뀐 순간 = 직전 정류장을 기준거리만큼 지난 시점 */
+        if (
+            previousDisplayedStationIndex !== -1 &&
+            previousDisplayedStationIndex !== currentIndex
+        ) {
+
+            if (
+                stationAnnouncementEnabled &&
+                lastNextAnnouncementIndex !== currentIndex
+            ) {
+
+                speakStationAnnouncement(
+                    `다음 정류장은 ${station.title} 입니다. ` +
+                    getStationArrivalSpeech(currentIndex)
+                );
+            }
+
+            lastNextAnnouncementIndex = currentIndex;
+        }
+
+        previousDisplayedStationIndex = currentIndex;
+
+
+        /* 도착 전 기준거리 진입 */
+        const arriveDistance =
+            getStationTriggerDistance(currentIndex);
+
+        const remaining =
+            stationProgress[currentIndex] - matchedProgress;
+
+        if (
+            remaining <= arriveDistance &&
+            remaining >= -arriveDistance
+        ) {
+
+            if (lastArrivedAnnouncementIndex !== currentIndex) {
+
+                if (stationAnnouncementEnabled) {
+                    speakStationAnnouncement(
+                        `이번 정류장은 ${station.title} 입니다. ` +
+                        getStationArrivalSpeech(currentIndex)
+                    );
+                }
+
+                lastArrivedAnnouncementIndex = currentIndex;
+            }
+        }
+    }
+
+
+    function updateScheduleResult() {
+
+        const currentTextElement =
+            document.getElementById('currentStationText');
+
+        const currentEtaElement =
+            document.getElementById('currentStationEta');
+
+        const nextTextElement =
+            document.getElementById('nextStationText');
+
+        const nextEtaElement =
+            document.getElementById('nextStationEta');
+
+        if (!currentTextElement || !nextTextElement) {
+            return;
+        }
+
+
+        if (!lastGpsPosition || matchedProgress === null) {
+
+            currentTextElement.textContent = 'GPS 확인 중...';
+            currentEtaElement.textContent = '';
+
+            nextTextElement.textContent = '-';
+            nextEtaElement.textContent = '';
+
+            return;
+        }
+
+
+        const currentIndex = getCurrentStationIndex();
+
+        if (currentIndex === -1) {
+
+            currentTextElement.textContent = '운행 종료';
+            currentEtaElement.textContent = '';
+
+            nextTextElement.textContent = '-';
+            nextEtaElement.textContent = '';
+
+            return;
+        }
+
+        const nextIndex =
+            getFollowingStationIndex(currentIndex);
+
+
+        /* 안내방송 */
+        handleStationAnnouncement(currentIndex);
+
+
+        /* 이번 정류장 (윗줄) */
+        currentTextElement.textContent =
+            activeRouteData[currentIndex].title;
+
+        currentEtaElement.textContent =
+            getStationArrivalText(currentIndex);
+
+
+        /* 다음 정류장 (아랫줄) */
+        if (nextIndex === -1) {
+
+            nextTextElement.textContent = '운행 종료';
+            nextEtaElement.textContent = '';
+
+        } else {
+
+            nextTextElement.textContent =
+                activeRouteData[nextIndex].title;
+
+            nextEtaElement.textContent =
+                getStationArrivalText(nextIndex);
+        }
+    }
+
+
+    /* ============================================================
+       저장된 출발 설정 복원
+    ============================================================ */
+
+    function initializeDepartureSelection() {
+    const savedRoute = localStorage.getItem('airportbus_route');
+    const routeSelect = document.getElementById('routeSelect');
+
+    if (savedRoute && ['01', '02', '03', '04', '05'].includes(savedRoute)) {
+        routeSelect.value = savedRoute;
+    } else {
+        routeSelect.value = '02';
+    }
+
+    const route = routeSelect.value;
+
+    document.getElementById('dayType').style.display =
+        route === '05' ? '' : 'none';
+
+    if (route === '05') {
+        const savedDayType =
+            localStorage.getItem('airportbus_05_dayType');
+
+        if (savedDayType === 'holiday' || savedDayType === 'workday') {
+            document.getElementById('dayType').value = savedDayType;
+        }
+    }
+
+    updateDepartureNumbers();
+
+    const savedDepartureAlarm =
+        localStorage.getItem('airportbus_departure_alarm');
+
+    if (savedDepartureAlarm === 'on') {
+        departureAlarmEnabled = true;
+        departureAlarmButton.textContent = '🔊 출발 알람 ON';
+        departureAlarmButton.classList.add('on');
+    } else {
+        departureAlarmEnabled = false;
+        departureAlarmButton.textContent = '🔊 출발 알람 OFF';
+        departureAlarmButton.classList.remove('on');
+    }
+
+    const savedStationAnnouncement =
+        localStorage.getItem('airportbus_station_announcement');
+
+    if (savedStationAnnouncement === 'on') {
+        stationAnnouncementEnabled = true;
+        stationAnnouncementButton.textContent = '🔊 안내방송 ON';
+        stationAnnouncementButton.classList.add('on');
+    } else {
+        stationAnnouncementEnabled = false;
+        stationAnnouncementButton.textContent = '🔊 안내방송 OFF';
+        stationAnnouncementButton.classList.remove('on');
+    }
+}
+
+
+    /* ============================================================
+       초기 실행
+    ============================================================ */
+
+    initializeDepartureSelection();
+
+
+</script>
+
+</body>
+</html>
