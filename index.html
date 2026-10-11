@@ -98,7 +98,7 @@
             background: #e5e7eb;
             color: #333333;
 
-            font-size: 16px;
+            font-size: 18px;
             line-height: 1;
             cursor: pointer;
             -webkit-tap-highlight-color: transparent;
@@ -119,7 +119,7 @@
         }
 
         #departurePanel select {
-            font-size: 16px;
+            font-size: 18px;
             padding: 4px 6px;
             margin-right: 4px;
             margin-top: 4px;
@@ -129,7 +129,7 @@
             flex: 1 1 auto;
             min-width: 0;
 
-            font-size: 15px;
+            font-size: 20px;
             font-weight: bold;
         }
 
@@ -212,12 +212,12 @@
         }
 
         #scheduleResult .current .name {
-            font-size: 30px;
+            font-size: 26px;
             color: #111111;
         }
 
         #scheduleResult .next .name {
-            font-size: 30px;
+            font-size: 26px;
             color: #444444;
         }
 
@@ -616,7 +616,7 @@ const routeData_04 = [
     { lat: 37.461268, lng: 126.467206, title: "화물A", minutes: 1, routeType: "일반" },
     { lat: 37.460354, lng: 126.465715, title: "경로지정좌표", minutes: 0, routeType: "일반" },
     { lat: 37.464206, lng: 126.480800, title: "임시3", minutes: 0, routeType: "일반" },
-    { lat: 37.458704, lng: 126.477289, title: "화물청사역(여객행)", minutes: 6, routeType: "일반" },
+    { lat: 37.459141, lng: 126.477993, title: "화물청사역(여객행)", minutes: 6, routeType: "일반" },
     { lat: 37.446593, lng: 126.476417, title: "임시4", minutes: 0, routeType: "일반" },
     { lat: 37.444548, lng: 126.472812, title: "임시5", minutes: 0, routeType: "일반" },
     { lat: 37.439499, lng: 126.461593, title: "국제업무단지", minutes: 7, routeType: "일반" },
@@ -725,31 +725,110 @@ const departureSchedules_05_holiday = {
     let rawGpsPosition = null;          // 원본 GPS (보정 전)
     let previousRawGpsPosition = null;  // 직전 원본 GPS
     let lastGpsPosition = null;         // 노선에 붙인 최종 위치
-    let currentGpsHeading = null;       // 화면 표시용 진행방향
-    let stableHeading = null;           // 안정화된 진행방향
+    let currentGpsHeading = null;       // 화면 표시용 진행방향 (노선에 붙어 있으면 노선 진행방향)
+    let stableHeading = null;           // 안정화된 진행방향 (GPS 원본 기준 - 보정 판단용)
+    let stableHeadingTime = 0;          // stableHeading 을 마지막으로 갱신한 시각(ms)
     let headingFlipCount = 0;           // 180도 뒤집힘 감지 카운트
+    let gpsSpeed = null;                // 추정 속도(m/s) - GPS 도플러 속도 우선
+    let gpsSpeedIsDoppler = false;      // gpsSpeed 가 GPS 도플러 속도인지 (정차 판정에 사용)
+    let lastFixTimestamp = 0;           // 마지막으로 처리한 GPS 시각(ms)
+    let recentFixes = [];               // 최근 GPS 기록 (최초/재 잠금 확인용)
 
     /* 노선(OSRM 실제 도로선)을 하나로 이은 경로 */
-    let routePath = [];                 // [{lat, lng, dist(누적 m), routeIndex}]
+    let routePath = [];                 // [{lat, lng, dist(누적 m), routeIndex, approx, bearing}]
     let stationProgress = [];           // routeData 인덱스별 누적거리(m)
-    let stationTriggerDistances = [];   // 정류장별 안내 기준거리(30m / 15m)
-    let realStationIndexes = [];        // 실제 정류장 인덱스 목록
+    let stationArriveDistances = [];    // 정류장별 "도착 전" 안내거리(m)
+    let stationDepartDistances = [];    // 정류장별 "출발 후" 안내거리(m)
+    let realStationIndexes = [];        // 실제 정류장 인덱스 목록 (출발 정류장 포함)
     let totalRouteLength = 0;
+    let osrmFailed = [];                // OSRM 도로선 요청이 실패한 구간
+    let routeRenderToken = 0;           // 노선을 다시 그릴 때마다 증가 (이전 노선의 늦은 응답 무시용)
 
     /* 노선 위에서의 현재 진행 위치 */
-    let matchedProgress = null;         // 노선 시작점부터의 누적거리(m)
+    let matchedProgress = null;         // 노선 시작점부터의 누적거리(m)  ※ 줄어들지 않음(순방향)
     let matchedPoint = null;            // 노선에 붙인 좌표
+    let matchedPathBearing = null;      // 붙인 지점의 노선 진행방향
     let matchedRouteIndex = 0;
-    let lastMatchTimestamp = 0;
-    let offRouteCount = 0;
+    let lastMatchTimestamp = 0;         // 마지막으로 GPS와 위치가 일치 확인된 시각(ms)
+    let lostFixCount = 0;               // 연속으로 노선에 붙이지 못한 GPS 횟수
+    let lockedOnApproxPath = false;     // 도로선이 다 오기 전(직선 임시경로)에 잠근 위치인지
+    let lockConsistencyFails = 0;       // 최초 잠금 확인에서 연속으로 불일치한 횟수
+    let pendingJump = null;             // 예상보다 크게 앞선 후보(1회째) - 2회 연속 확인되면 인정
+
+    /* 정류장 안내방송 진행 상태 (노선 순방향 순서로만 진행) */
+    let announceEvents = [];            // [{type:'arrive'|'depart', k, index, at(누적거리 m)}] 순서대로
+    let announcePtr = -1;               // 다음에 확인할 안내 번호 (-1 = 최초 잠금 대기: 조용히 위치만 맞춤)
+
+    function resetAnnouncementState() {
+        announcePtr = -1;
+    }
+
+    /* 노선이 바뀌면 맵매칭 상태도 초기화 */
+    function resetRouteMatchingState() {
+        routePath = [];
+        stationProgress = [];
+        stationArriveDistances = [];
+        stationDepartDistances = [];
+        realStationIndexes = [];
+        osrmFailed = [];
+        announceEvents = [];
+        totalRouteLength = 0;
+        matchedProgress = null;
+        matchedPoint = null;
+        matchedPathBearing = null;
+        matchedRouteIndex = 0;
+        lastMatchTimestamp = 0;
+        lostFixCount = 0;
+        lockedOnApproxPath = false;
+        lockConsistencyFails = 0;
+        pendingJump = null;
+        resetAnnouncementState();
+    }
+
+    /* ------------------------------------------------------------
+       현재위치 보정(노선 맵매칭) 설정
+       - 원칙 : 노선 전체에서 "가장 가까운 선"을 찾지 않고,
+                직전 위치에서 노선 순방향으로 조금 앞선 구간만 후보로 삼는다.
+                (U턴/회전으로 가까이 붙은 다른 도로선에 달라붙지 않게 하기 위함)
+       - 기존 : 후보 탐색 200m / 붙임 한계 40~90m / 앞뒤 구분 약함
+       - 값이 너무 작아 위치가 자주 멈추면 MATCH_SNAP_MAX 를 조금 키우고,
+         다른 라인에 붙으면 줄이면 된다.
+       ------------------------------------------------------------ */
+    const MATCH_SNAP_MIN = 15;            // 붙임 반경 최소(m)  - GPS 정확도가 좋을 때
+    const MATCH_SNAP_MAX = 35;            // 붙임 반경 최대(m)
+    const MATCH_SNAP_ACC_FACTOR = 1.3;    // 반경 = GPS 정확도 × 1.3 + 5m  (위 범위로 제한)
+    const MATCH_SNAP_ACC_MARGIN = 5;
+    const MATCH_APPROX_SCALE = 2.5;       // 도로선을 못 받아 직선으로 임시 연결한 구간은 반경 확대
+    const MATCH_BACK_TOLERANCE = 20;      // 직전 위치보다 뒤쪽 후보 허용폭(m) - GPS 흔들림 흡수 (진행거리는 줄지 않음)
+    const MATCH_FORWARD_MARGIN = 30;      // 앞쪽 후보 허용 여유(m)
+    const MATCH_MAX_SPEED = 25;           // 차량 최대 속도(m/s) - 이보다 빠른 점프는 GPS 튐으로 판단
+    const MATCH_ACCURACY_REJECT = 50;     // 이보다 부정확한 GPS는 보정에 쓰지 않음(m)
+    const MATCH_JUMP_LIMIT = 15;          // 예상 위치보다 이 이상 앞선 후보는 GPS 튐 의심 → 2회 연속 확인되어야 인정(m)
+    const MATCH_HEADING_MIN_SPEED = 2.5;  // 이 속도 이상일 때만 진행방향을 판단에 사용(m/s)
+    const MATCH_HEADING_LIMIT = 100;      // 노선 진행방향과 이 각도 이상 어긋난 도로선은 제외(°)
+    const MATCH_HEADING_WEIGHT = 0.25;    // 방향 차이 1° 당 감점(m 환산)
+    const MATCH_PROGRESS_WEIGHT = 0.3;    // 예상 진행위치와 1m 차이 당 감점
+    const MATCH_STATIONARY_SPEED = 0.6;   // 이 속도 미만이면 정차 → 흔들림으로 진행거리가 늘지 않게 고정(m/s)
+    const MATCH_LOST_RELOCK_FIXES = 5;    // 연속 N회 못 붙이면 노선 전체에서 다시 잠금
+    const MATCH_END_ZONE = 60;            // 노선 끝(종점)까지 남은 거리가 이보다 작으면 '종점 도착'으로 봄(m)
+    const MATCH_END_RELOCK_FIXES = 2;     // 종점에서 다시 움직여 놓치면(새 회차 출발) 더 빨리 다시 잠금
+    const MATCH_OFFROUTE_FIXES = 10;      // 연속 N회 못 붙이면 원본 GPS 위치를 그대로 표시
+    const MATCH_LOCK_RADIUS_SCALE = 1.6;  // 최초/재 잠금 반경 배율 (최대 50m)
+    const MATCH_LOCK_CONFIRM_FIXES = 2;   // 최초/재 잠금은 GPS가 연속 N회 같은 위치를 가리킬 때만
+    const MATCH_LOCK_FORCE_FIXES = 6;     // 확인이 계속 어긋나면 N회째에는 그냥 잠금
+    const MATCH_LOCK_HEADING_WEIGHT = 0.4;
+    const MATCH_TIME_WEIGHT = 0.02;       // 시간표 예상위치와 1m 차이 당 감점 (최초/재 잠금에서만)
+    const MATCH_TIME_CAP = 60;            // 시간표 감점 상한(m 환산)
 
     /* ------------------------------------------------------------
        정류장 안내 기준거리
-       - 기본 : 도착 전 30m / 출발 후 30m
+       - 기본 : 도착 50m 전 "이번 정류장" / 출발 50m 후 "다음 정류장"
        - 정류장 간격이 좁은 곳(02번 장기탑승장3-4 등) : 15m
+       - 앞/뒤 정류장 사이 거리의 1/3 을 넘지 않게 줄여 안내가 서로 겹치지 않게 함
+         (도착 전 / 출발 후 거리는 앞쪽 간격 / 뒤쪽 간격으로 각각 따로 계산)
        - 정류장별 예외(STATION_DISTANCE_OVERRIDES) : 01번 장기탑승장 1~7번 15m / 20m
        ------------------------------------------------------------ */
-    const STATION_DISTANCE_DEFAULT = 30;
+    const STATION_DISTANCE_DEFAULT = 50;
     const STATION_DISTANCE_CLOSE = 15;
     const STATION_CLOSE_GAP = 90;       // 앞뒤 정류장 간격이 90m 미만이면 좁은 정류장으로 판단
 
@@ -1160,9 +1239,7 @@ function updateDepartureTimes() {
 
     renderRoute();
 
-    lastArrivedAnnouncementIndex = -1;
-    lastNextAnnouncementIndex = -1;
-    previousDisplayedStationIndex = -1;
+    resetAnnouncementState();
 
     updateScheduleResult();
 }
@@ -1217,15 +1294,10 @@ departureTimeSelect.addEventListener('change', function() {
         osrmRouteGeometries = [];
 
         /* 노선이 바뀌면 맵매칭 상태도 초기화 */
-        routePath = [];
-        stationProgress = [];
-        stationTriggerDistances = [];
-        realStationIndexes = [];
-        matchedProgress = null;
-        matchedPoint = null;
-        matchedRouteIndex = 0;
-        lastMatchTimestamp = 0;
-        offRouteCount = 0;
+        resetRouteMatchingState();
+
+        /* 이전 노선의 늦게 도착한 도로선 응답이 새 노선에 섞이지 않도록 표시 */
+        const renderToken = ++routeRenderToken;
 
         /* 정류장 표시 */
         activeRouteData.forEach(function(point) {
@@ -1290,6 +1362,10 @@ departureTimeSelect.addEventListener('change', function() {
             });
 
             control.on('routesfound', function(e) {
+                if (renderToken !== routeRenderToken) {
+                    return;
+                }
+
                 if (e.routes && e.routes[0] && e.routes[0].coordinates) {
                     osrmRouteGeometries[i] = e.routes[0].coordinates.map(function(p) {
                         return { lat: p.lat, lng: p.lng };
@@ -1303,7 +1379,16 @@ departureTimeSelect.addEventListener('change', function() {
             });
 
             control.on('routingerror', function() {
+                if (renderToken !== routeRenderToken) {
+                    return;
+                }
+
                 console.warn('OSRM 경로 계산 실패: 구간 ' + i);
+
+                /* 실패한 구간은 직선 임시경로로 계속 사용 */
+                osrmFailed[i] = true;
+                rebuildRoutePath();
+                updateScheduleResult();
             });
 
             control.addTo(map);
@@ -1659,6 +1744,75 @@ departureTimeSelect.addEventListener('change', function() {
     }
 
 
+    /* ------------------------------------------------------------
+       GPS 속도 / 진행방향 계산 (원본 GPS 기준 - 보정 결과와 섞지 않음)
+       - 속도 : GPS 도플러 속도 우선, 없으면 이동거리/시간
+       - 진행방향 : GPS heading 우선(주행 중일 때만), 없으면 실제 이동좌표
+       ------------------------------------------------------------ */
+    function updateGpsKinematics(coords, latlng, timestamp, accuracy) {
+
+        const dt =
+            lastFixTimestamp
+                ? (timestamp - lastFixTimestamp) / 1000
+                : 0;
+
+        const moved =
+            rawGpsPosition
+                ? metersBetween(rawGpsPosition, latlng)
+                : 0;
+
+        const accOk =
+            !Number.isFinite(accuracy) || accuracy <= 30;
+
+        const noise =
+            Math.max(6, (Number.isFinite(accuracy) ? accuracy : 10) * 1.5);
+
+        /* 속도 */
+        if (Number.isFinite(coords.speed) && coords.speed >= 0) {
+
+            gpsSpeed = coords.speed;
+            gpsSpeedIsDoppler = true;
+
+        } else {
+
+            gpsSpeedIsDoppler = false;
+
+            if (dt >= 0.3 && dt <= 10) {
+                /* 이동거리가 GPS 흔들림보다 충분히 클 때만 이동으로 인정 */
+                gpsSpeed =
+                    (accOk && moved >= noise)
+                        ? Math.min(40, moved / dt)
+                        : 0;
+            }
+        }
+
+        /* 진행방향 */
+        let heading = null;
+
+        if (
+            Number.isFinite(coords.heading) &&
+            gpsSpeedIsDoppler &&
+            gpsSpeed >= 1.5
+        ) {
+            heading = coords.heading;
+
+        } else if (
+            rawGpsPosition &&
+            accOk &&
+            dt > 0 && dt <= 10 &&
+            moved >= Math.max(8, Number.isFinite(accuracy) ? accuracy : 10) &&
+            moved / dt >= 2 &&
+            moved / dt <= 40
+        ) {
+            /* 정차 중 미세한 흔들림은 방향으로 보지 않음 */
+            heading = calculateBearing(rawGpsPosition, latlng);
+        }
+
+        /* 한 번의 GPS 튐으로 180도 뒤집히는 것은 무시 */
+        updateStableHeading(heading, timestamp);
+    }
+
+
     function processGpsPosition(position) {
 
         const coords = position.coords;
@@ -1666,90 +1820,84 @@ departureTimeSelect.addEventListener('change', function() {
         const timestamp =
             position.timestamp || Date.now();
 
+        /* 같은 시각 / 이전 시각 GPS가 다시 전달되면 무시 (중복 처리 방지) */
+        if (lastFixTimestamp && timestamp <= lastFixTimestamp) {
+            return;
+        }
+
         const latlng =
             L.latLng(
                 coords.latitude,
                 coords.longitude
             );
 
+        const accuracy = Number(coords.accuracy);
+
 
         /* ------------------------------------------------------------
-           1) 진행방향 결정
-              - 스마트폰 GPS heading 우선
-              - heading이 없으면 이전 GPS 좌표에서 이동방향 계산
+           1) 속도 / 진행방향 결정 (원본 GPS 기준)
            ------------------------------------------------------------ */
 
-        let heading = null;
+        updateGpsKinematics(coords, latlng, timestamp, accuracy);
 
-        if (
-            Number.isFinite(coords.heading) &&
-            coords.speed !== null &&
-            coords.speed !== undefined &&
-            coords.speed > 0.5
-        ) {
-            heading = coords.heading;
-        }
-
-        if (heading === null && rawGpsPosition) {
-
-            const movedMeters =
-                metersBetween(rawGpsPosition, latlng);
-
-            /* 정차 중 미세한 흔들림은 방향으로 보지 않음 */
-            if (movedMeters >= 5) {
-                heading = calculateBearing(rawGpsPosition, latlng);
-            }
-        }
-
-        /* 한 번의 GPS 튐으로 180도 뒤집히는 것은 무시 */
-        updateStableHeading(heading);
-
+        const headingReliable =
+            Number.isFinite(stableHeading) &&
+            gpsSpeed !== null &&
+            gpsSpeed >= MATCH_HEADING_MIN_SPEED &&
+            (timestamp - stableHeadingTime) < 4000;
 
         previousRawGpsPosition = rawGpsPosition;
         rawGpsPosition = latlng;
+        lastFixTimestamp = timestamp;
+
+        const fix = {
+            lat: latlng.lat,
+            lng: latlng.lng,
+            accuracy: accuracy,
+            t: timestamp,
+            speed: gpsSpeed,
+            dop: gpsSpeedIsDoppler,
+            heading: headingReliable ? stableHeading : null
+        };
+
+        recentFixes.push(fix);
+
+        if (recentFixes.length > 4) {
+            recentFixes.shift();
+        }
 
 
         /* ------------------------------------------------------------
            2) GPS를 실제 노선(OSRM 도로선)에 붙임
               - 원본 GPS를 그대로 정류장 판단에 사용하지 않음
-              - 반대 방향 도로는 강하게 제외
-              - 크게 튀면 기존 진행 위치를 유지
+              - 직전 위치에서 노선 순방향으로 조금 앞선 구간만 후보로 삼음
+              - 반경은 작게, 진행방향이 다른 도로선은 제외
+              - 튄 GPS는 무시하고 기존 진행 위치를 유지
            ------------------------------------------------------------ */
 
-        const matched =
-            matchGpsToRoute(
-                latlng,
-                coords.accuracy,
-                timestamp
-            );
+        updateMatching(fix);
 
-        if (matched) {
 
-            matchedProgress = matched.progress;
-            matchedPoint = L.latLng(matched.lat, matched.lng);
-            matchedRouteIndex = matched.routeIndex;
-            lastMatchTimestamp = timestamp;
+        /* 보정된 위치가 있으면 그것을 사용 (노선에 붙은 마커)
+           오래 못 붙이면(노선 이탈) 원본 GPS 위치를 그대로 표시 */
+        const showRaw =
+            matchedPoint === null ||
+            lostFixCount >= MATCH_OFFROUTE_FIXES;
 
-            /* 노선 진행방향으로 진행방향을 계속 안정화 */
-            if (Number.isFinite(stableHeading)) {
+        lastGpsPosition = showRaw ? latlng : matchedPoint;
 
-                if (angleDifference(stableHeading, matched.bearing) < 70) {
-                    stableHeading =
-                        blendAngle(stableHeading, matched.bearing, 0.3);
-                }
+        /* 화살표 방향 : 노선에 붙어 있으면 노선 진행방향(위치와 방향 일치) */
+        if (!showRaw && Number.isFinite(matchedPathBearing)) {
 
-            } else {
-                stableHeading = matched.bearing;
-            }
+            currentGpsHeading = matchedPathBearing;
+
+        } else {
+
+            currentGpsHeading =
+                Number.isFinite(stableHeading)
+                    ? stableHeading
+                    : null;
         }
-
-        /* 보정된 위치가 있으면 그것을 사용 (노선에 붙은 마커) */
-        lastGpsPosition = matchedPoint || latlng;
-
-        currentGpsHeading =
-            Number.isFinite(stableHeading)
-                ? stableHeading
-                : null;
 
 
         /*
@@ -2004,14 +2152,21 @@ departureTimeSelect.addEventListener('change', function() {
        - 연속 2회 이상 같은 방향이 들어올 때만 반영
     ============================================================ */
 
-    function updateStableHeading(rawHeading) {
+    function updateStableHeading(rawHeading, timestamp) {
 
         if (!Number.isFinite(rawHeading)) {
             return;
         }
 
-        if (!Number.isFinite(stableHeading)) {
+        const now = timestamp || Date.now();
+
+        /* 방향 정보가 한동안 없었으면(정차 등) 이전 방향은 낡은 값 → 새 방향으로 바로 교체 */
+        if (
+            !Number.isFinite(stableHeading) ||
+            now - stableHeadingTime > 4000
+        ) {
             stableHeading = normalizeAngle(rawHeading);
+            stableHeadingTime = now;
             headingFlipCount = 0;
             return;
         }
@@ -2029,6 +2184,7 @@ departureTimeSelect.addEventListener('change', function() {
             }
 
             stableHeading = normalizeAngle(rawHeading);
+            stableHeadingTime = now;
             headingFlipCount = 0;
             return;
         }
@@ -2037,6 +2193,8 @@ departureTimeSelect.addEventListener('change', function() {
 
         stableHeading =
             blendAngle(stableHeading, rawHeading, 0.6);
+
+        stableHeadingTime = now;
     }
 
 
@@ -2044,14 +2202,169 @@ departureTimeSelect.addEventListener('change', function() {
        실제 노선(OSRM 도로선)을 하나의 경로로 연결
        - 각 점에 노선 시작점부터의 누적거리(dist)를 기록
        - 정류장별 누적거리(stationProgress)도 같이 계산
+       - 도로선이 아직 안 온 구간은 직선으로 임시 연결(approx)
     ============================================================ */
 
-    function isRealStation(point) {
-        return (
-            point &&
-            point.title !== '경로지정좌표' &&
-            Number(point.minutes) > 0
-        );
+    /* 실제 정류장 판단
+       - '경로지정좌표' / 소요시간 0분인 임시 지점은 정류장이 아님
+       - 첫 지점(출발 정류장)은 소요시간이 0분이지만 정류장으로 취급
+         (출발 직후 "다음 정류장" 안내와 출발지 표시를 위해) */
+    function isRealStation(point, index) {
+        if (!point || point.title === '경로지정좌표') {
+            return false;
+        }
+
+        return index === 0 || Number(point.minutes) > 0;
+    }
+
+
+    /* 모든 구간의 도로선이 도착했는지 (실패한 구간은 포기한 것으로 봄) */
+    function geometryComplete() {
+
+        if (!activeRouteData) {
+            return false;
+        }
+
+        for (let i = 0; i < activeRouteData.length - 1; i++) {
+
+            const g = osrmRouteGeometries[i];
+
+            if (!(g && g.length >= 2) && !osrmFailed[i]) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+
+    /* 진행거리가 속한 routeData 구간 번호 (stationProgress 기준) */
+    function segmentIndexFromProgress(progress) {
+
+        let ri = 0;
+
+        for (let i = 0; i < stationProgress.length - 1; i++) {
+            if (stationProgress[i] <= progress) {
+                ri = i;
+            } else {
+                break;
+            }
+        }
+
+        return Math.min(ri, stationProgress.length - 2);
+    }
+
+
+    /* routePath[j].dist <= progress <= routePath[j+1].dist 인 j */
+    function findPathIndex(progress) {
+
+        const last = routePath.length - 1;
+
+        if (progress <= 0) {
+            return 0;
+        }
+
+        if (progress >= routePath[last].dist) {
+            return last - 1;
+        }
+
+        let lo = 0;
+        let hi = last;
+
+        while (hi - lo > 1) {
+
+            const mid = (lo + hi) >> 1;
+
+            if (routePath[mid].dist <= progress) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+
+        return lo;
+    }
+
+
+    /* 노선 위 진행거리 지점의 좌표 / 진행방향 */
+    function pointAtProgress(progress) {
+
+        const j = findPathIndex(progress);
+
+        const a = routePath[j];
+        const b = routePath[j + 1];
+
+        const len = b.dist - a.dist;
+
+        const t =
+            len > 0
+                ? Math.min(1, Math.max(0, (progress - a.dist) / len))
+                : 0;
+
+        let bearing = null;
+
+        if (Number.isFinite(a.bearing) && Number.isFinite(b.bearing)) {
+            bearing = blendAngle(a.bearing, b.bearing, t);
+        } else if (Number.isFinite(a.bearing)) {
+            bearing = a.bearing;
+        } else if (Number.isFinite(b.bearing)) {
+            bearing = b.bearing;
+        }
+
+        return {
+            lat: a.lat + (b.lat - a.lat) * t,
+            lng: a.lng + (b.lng - a.lng) * t,
+            bearing: bearing,
+            routeIndex: a.routeIndex
+        };
+    }
+
+
+    /* 각 점의 노선 진행방향 (앞뒤 12m 범위로 평활화 - 선분 하나의 들쭉날쭉한 방향 방지) */
+    function computePathBearings() {
+
+        const LOOK = 12;
+        const n = routePath.length;
+
+        for (let j = 0; j < n; j++) {
+
+            let i0 = j;
+            let i1 = j;
+
+            while (i0 > 0 && routePath[j].dist - routePath[i0].dist < LOOK) {
+                i0--;
+            }
+
+            while (i1 < n - 1 && routePath[i1].dist - routePath[j].dist < LOOK) {
+                i1++;
+            }
+
+            let bearing = null;
+
+            if (metersBetween(routePath[i0], routePath[i1]) >= 4) {
+                bearing = calculateBearing(routePath[i0], routePath[i1]);
+            } else if (j < n - 1) {
+                bearing = calculateBearing(routePath[j], routePath[j + 1]);
+            } else if (j > 0) {
+                bearing = calculateBearing(routePath[j - 1], routePath[j]);
+            }
+
+            routePath[j].bearing = bearing;
+        }
+    }
+
+
+    function setMatchedProgress(progress, timestamp) {
+
+        progress = Math.min(totalRouteLength, Math.max(0, progress));
+
+        const pt = pointAtProgress(progress);
+
+        matchedProgress = progress;
+        matchedPoint = L.latLng(pt.lat, pt.lng);
+        matchedPathBearing = pt.bearing;
+        matchedRouteIndex = pt.routeIndex;
+        lastMatchTimestamp = timestamp;
     }
 
 
@@ -2059,6 +2372,25 @@ departureTimeSelect.addEventListener('change', function() {
 
         if (!activeRouteData || activeRouteData.length < 2) {
             return;
+        }
+
+        /* 이전 진행 위치를 "구간 번호 + 구간 안 비율"로 기억해 둔다.
+           (도로선이 도착해 구간 길이가 바뀌어도 같은 위치에 머물도록 - 위치를 처음부터 다시 찾지 않음) */
+        let anchor = null;
+
+        if (
+            matchedProgress !== null &&
+            stationProgress.length === activeRouteData.length
+        ) {
+            const ri = segmentIndexFromProgress(matchedProgress);
+            const segLen = stationProgress[ri + 1] - stationProgress[ri];
+
+            anchor = {
+                ri: ri,
+                frac: segLen > 0
+                    ? Math.min(1, Math.max(0, (matchedProgress - stationProgress[ri]) / segLen))
+                    : 0
+            };
         }
 
         routePath = [];
@@ -2072,9 +2404,11 @@ departureTimeSelect.addEventListener('change', function() {
             const to = activeRouteData[i + 1];
 
             let geometry = osrmRouteGeometries[i];
+            let approx = false;
 
             /* OSRM 응답 전이거나 실패한 구간은 직선으로 임시 연결 */
             if (!geometry || geometry.length < 2) {
+                approx = true;
                 geometry = [
                     { lat: from.lat, lng: from.lng },
                     { lat: to.lat, lng: to.lng }
@@ -2092,7 +2426,9 @@ departureTimeSelect.addEventListener('change', function() {
                         lat: point.lat,
                         lng: point.lng,
                         dist: 0,
-                        routeIndex: i
+                        routeIndex: i,
+                        approx: approx,
+                        bearing: null
                     });
                     continue;
                 }
@@ -2110,7 +2446,9 @@ departureTimeSelect.addEventListener('change', function() {
                     lat: point.lat,
                     lng: point.lng,
                     dist: cumulative,
-                    routeIndex: i
+                    routeIndex: i,
+                    approx: approx,
+                    bearing: null
                 });
             }
         }
@@ -2118,89 +2456,136 @@ departureTimeSelect.addEventListener('change', function() {
         stationProgress[activeRouteData.length - 1] = cumulative;
         totalRouteLength = cumulative;
 
+        if (routePath.length < 2) {
+            matchedProgress = null;
+            matchedPoint = null;
+            matchedPathBearing = null;
+            return;
+        }
+
+        computePathBearings();
         computeStationTriggerDistances();
+        buildAnnouncementEvents();
 
-        /* 노선 길이가 바뀌었으므로 진행 위치는 새 경로 기준으로 다시 계산 */
-        matchedProgress = null;
-        offRouteCount = 0;
+        /* 기억해 둔 위치를 새 경로 기준으로 복원 */
+        if (anchor) {
+            const segLen = stationProgress[anchor.ri + 1] - stationProgress[anchor.ri];
 
-        remapCurrentPosition();
+            setMatchedProgress(
+                stationProgress[anchor.ri] + anchor.frac * segLen,
+                lastMatchTimestamp
+            );
+        }
+
+        /* 직선 임시경로로 잠근 위치는, 실제 도로선이 다 오면 도로선 기준으로 다시 잠금 */
+        if (
+            matchedProgress !== null &&
+            lockedOnApproxPath &&
+            geometryComplete()
+        ) {
+            matchedProgress = null;
+            matchedPoint = null;
+            matchedPathBearing = null;
+            lockedOnApproxPath = false;
+            lostFixCount = 0;
+        }
+
+        if (matchedProgress === null) {
+            lockToRoute();
+        }
+
+        if (matchedPoint !== null) {
+
+            lastGpsPosition = matchedPoint;
+
+            if (currentLocationMarker) {
+                currentLocationMarker.setLatLng(matchedPoint);
+            }
+
+            if (Number.isFinite(matchedPathBearing)) {
+                currentGpsHeading = matchedPathBearing;
+                updateGpsArrow();
+            }
+        }
     }
 
 
     /* ============================================================
-       정류장별 안내 기준거리
-       - 기본 : 30m
-       - 앞/뒤 정류장 간격이 좁으면 : 15m
+       정류장별 안내 기준거리 (도착 전 / 출발 후를 따로 계산)
+       - 기본 : 50m
+       - 앞(또는 뒤) 정류장과의 간격이 좁으면 : 15m
          (02번 장기탑승장3(남) ↔ 장기탑승장4(북) 처럼 40m 대 간격)
-        - 정류장별 예외(STATION_DISTANCE_OVERRIDES)가 있으면 그 값을 우선 사용
+       - 정류장별 예외(STATION_DISTANCE_OVERRIDES)가 있으면 그 값을 우선 사용
+       - 어떤 경우에도 해당 간격의 1/3 을 넘지 않음
+         → "다음 정류장" 안내(출발 후)와 "이번 정류장" 안내(도착 전)가 겹치지 않음
     ============================================================ */
 
     function computeStationTriggerDistances() {
 
-        stationTriggerDistances =
+        stationArriveDistances =
+            new Array(activeRouteData.length).fill(STATION_DISTANCE_DEFAULT);
+
+        stationDepartDistances =
             new Array(activeRouteData.length).fill(STATION_DISTANCE_DEFAULT);
 
         realStationIndexes = [];
 
         for (let i = 0; i < activeRouteData.length; i++) {
-            if (isRealStation(activeRouteData[i])) {
+            if (isRealStation(activeRouteData[i], i)) {
                 realStationIndexes.push(i);
             }
         }
+
+        const overrideTable =
+            STATION_DISTANCE_OVERRIDES.get(activeRouteData);
 
         for (let k = 0; k < realStationIndexes.length; k++) {
 
             const index = realStationIndexes[k];
 
-            let gap = Infinity;
+            const gapBefore =
+                k > 0
+                    ? stationProgress[index] - stationProgress[realStationIndexes[k - 1]]
+                    : Infinity;
 
-            if (k > 0) {
-                gap = Math.min(
-                    gap,
-                    stationProgress[index] -
-                    stationProgress[realStationIndexes[k - 1]]
-                );
-            }
+            const gapAfter =
+                k < realStationIndexes.length - 1
+                    ? stationProgress[realStationIndexes[k + 1]] - stationProgress[index]
+                    : Infinity;
 
-            if (k < realStationIndexes.length - 1) {
-                gap = Math.min(
-                    gap,
-                    stationProgress[realStationIndexes[k + 1]] -
-                    stationProgress[index]
-                );
-            }
+            const sideDistance = function(gap) {
 
-            let trigger = STATION_DISTANCE_DEFAULT;
+                let distance = STATION_DISTANCE_DEFAULT;
 
-            if (gap < STATION_CLOSE_GAP) {
-                trigger = STATION_DISTANCE_CLOSE;
-            }
+                if (gap < STATION_CLOSE_GAP) {
+                    distance = STATION_DISTANCE_CLOSE;
+                }
 
-            /* 정류장별 예외값이 있으면 우선 적용 */
-            const overrideTable =
-                STATION_DISTANCE_OVERRIDES.get(activeRouteData);
+                /* 정류장별 예외값이 있으면 우선 적용 */
+                if (
+                    overrideTable &&
+                    Number.isFinite(overrideTable[activeRouteData[index].title])
+                ) {
+                    distance = overrideTable[activeRouteData[index].title];
+                }
 
-            if (
-                overrideTable &&
-                Number.isFinite(overrideTable[activeRouteData[index].title])
-            ) {
-                trigger = overrideTable[activeRouteData[index].title];
-            }
+                /* 간격이 아주 좁으면 안내가 겹치지 않도록 더 줄임 */
+                if (Number.isFinite(gap)) {
+                    distance = Math.min(distance, Math.max(8, gap / 3));
+                }
 
-            /* 간격이 아주 좁으면 안내가 겹치지 않도록 더 줄임 */
-            if (Number.isFinite(gap)) {
-                trigger = Math.min(trigger, Math.max(8, gap / 3));
-            }
+                return distance;
+            };
 
-            stationTriggerDistances[index] = trigger;
+            stationArriveDistances[index] = sideDistance(gapBefore);
+            stationDepartDistances[index] = sideDistance(gapAfter);
         }
     }
 
 
-    function getStationTriggerDistance(index) {
+    function getStationArriveDistance(index) {
 
-        const value = stationTriggerDistances[index];
+        const value = stationArriveDistances[index];
 
         return Number.isFinite(value)
             ? value
@@ -2208,159 +2593,458 @@ departureTimeSelect.addEventListener('change', function() {
     }
 
 
+    function getStationDepartDistance(index) {
+
+        const value = stationDepartDistances[index];
+
+        return Number.isFinite(value)
+            ? value
+            : STATION_DISTANCE_DEFAULT;
+    }
+
+
+    /* 안내방송 이벤트 목록 (노선 순방향 순서)
+       정류장마다 : 도착 전 "이번 정류장" → 출발 후 "다음 정류장"(마지막 정류장은 출발 없음) */
+    function buildAnnouncementEvents() {
+
+        announceEvents = [];
+
+        for (let k = 0; k < realStationIndexes.length; k++) {
+
+            const index = realStationIndexes[k];
+
+            announceEvents.push({
+                type: 'arrive',
+                k: k,
+                index: index,
+                at: stationProgress[index] - getStationArriveDistance(index)
+            });
+
+            if (k < realStationIndexes.length - 1) {
+                announceEvents.push({
+                    type: 'depart',
+                    k: k,
+                    index: index,
+                    at: stationProgress[index] + getStationDepartDistance(index)
+                });
+            }
+        }
+
+        /* 지점이 겹치는 극단적인 경우에도 순서가 뒤바뀌지 않도록 */
+        for (let e = 1; e < announceEvents.length; e++) {
+            if (announceEvents[e].at < announceEvents[e - 1].at) {
+                announceEvents[e].at = announceEvents[e - 1].at;
+            }
+        }
+    }
+
+
     /* ============================================================
-       GPS → 노선 맵매칭
-       - 실제 도로선에서 가장 가까운 지점을 찾음
-       - GPS 진행방향과 노선 진행방향이 맞는 선분 우선
-       - 반대 방향 도로(110도 초과)는 후보에서 제외
-       - 뒤로 튀거나 비현실적으로 앞으로 점프하는 후보는 감점
+       GPS → 노선 맵매칭 (보정)
+
+       [추적] 이미 노선에 붙어 있을 때
+         - 직전 진행위치에서 "조금 뒤(20m) ~ 속도에 맞게 앞쪽" 구간만 후보
+           → 가까이 붙은 다른 도로선(U턴 반대편, 평행 도로)은 후보에서 제외
+         - 붙임 반경은 GPS 정확도에 맞춰 15~35m (기존 40~90m)
+         - 속도가 있을 때 진행방향이 100° 이상 다른 선분은 제외
+         - 진행위치는 줄어들지 않음(순방향), 정차 중에는 고정
+         - 노선에서 벗어난(튄) GPS는 무시하고 기존 위치 유지
+       [잠금] 처음 붙이거나 계속 놓쳤을 때 (노선 전체 탐색)
+         - GPS 2회가 같은 위치를 가리킬 때만 확정 (GPS 한 번 튐으로 잠기지 않음)
+         - 시작점=끝점인 순환노선은 출발시간표 기준 예상 위치로 구분
     ============================================================ */
 
-    function matchGpsToRoute(gps, accuracy, timestamp) {
+    function getSnapRadius(accuracy) {
 
-        if (routePath.length < 2) {
+        const acc =
+            (Number.isFinite(accuracy) && accuracy > 0)
+                ? accuracy
+                : 15;
+
+        return Math.min(
+            MATCH_SNAP_MAX,
+            Math.max(
+                MATCH_SNAP_MIN,
+                acc * MATCH_SNAP_ACC_FACTOR + MATCH_SNAP_ACC_MARGIN
+            )
+        );
+    }
+
+
+    /* 선택된 출발시간 기준, 지금 노선 위 어디쯤 있어야 하는지 (출발 전이면 출발지)
+       - 최초/재 잠금에서 "시작점=끝점" 같은 모호한 경우를 가르는 용도로만 약하게 사용 */
+    function expectedProgressBySchedule() {
+
+        if (!activeRouteData || !stationProgress.length) {
             return null;
         }
 
-        /* 직전 매칭 이후 경과시간으로 이동 가능 거리 추정 */
-        let forwardLimit = Infinity;
+        const depMinutes =
+            parseTimeToMinutes(departureTimeSelect.value);
 
-        if (matchedProgress !== null && lastMatchTimestamp) {
-
-            const elapsed =
-                Math.min(
-                    30,
-                    Math.max(0.5, (timestamp - lastMatchTimestamp) / 1000)
-                );
-
-            /* 최대 약 140km/h + 여유 */
-            forwardLimit = 40 * elapsed + 80;
+        if (depMinutes === null) {
+            return null;
         }
 
-        /* GPS 정확도에 따라 노선에 붙일 수 있는 최대 거리 */
-        const snapLimit =
-            Math.min(
-                90,
-                Math.max(40, (Number(accuracy) || 20) + 30)
-            );
+        const now = new Date();
+
+        const nowMinutes =
+            now.getHours() * 60 +
+            now.getMinutes() +
+            now.getSeconds() / 60;
+
+        /* 출발 후 경과 분 (자정 넘김을 고려해 -12h ~ +12h 로 정규화) */
+        let elapsed = nowMinutes - depMinutes;
+        elapsed = (((elapsed + 720) % 1440) + 1440) % 1440 - 720;
+
+        if (elapsed <= 0) {
+            return 0;
+        }
+
+        const cumulative = [0];
+        let sum = 0;
+
+        for (let i = 1; i < activeRouteData.length; i++) {
+            sum += Number(activeRouteData[i].minutes) || 0;
+            cumulative.push(sum);
+        }
+
+        let lo = 0;
+
+        for (let i = 0; i < cumulative.length; i++) {
+            if (cumulative[i] <= elapsed) {
+                lo = i;
+            } else {
+                break;
+            }
+        }
+
+        if (lo >= cumulative.length - 1) {
+            return totalRouteLength;
+        }
+
+        const span = cumulative[lo + 1] - cumulative[lo];
+
+        const t =
+            span > 0
+                ? (elapsed - cumulative[lo]) / span
+                : 0;
+
+        return stationProgress[lo] +
+            t * (stationProgress[lo + 1] - stationProgress[lo]);
+    }
+
+
+    /* 진행거리 [lo, hi] 범위의 선분 중 GPS에 가장 알맞은 지점을 찾는다 */
+    function scoreCandidates(fix, lo, hi, opt) {
 
         let best = null;
 
-        for (let j = 0; j < routePath.length - 1; j++) {
+        const startIndex =
+            Number.isFinite(lo)
+                ? findPathIndex(Math.max(0, lo))
+                : 0;
+
+        for (let j = startIndex; j < routePath.length - 1; j++) {
 
             const a = routePath[j];
+
+            if (a.dist > hi) {
+                break;
+            }
+
             const b = routePath[j + 1];
 
-            const info = getPointToSegmentInfo(gps, a, b);
+            const info = getPointToSegmentInfo(fix, a, b);
 
-            if (info.distance > 200) {
+            const radius =
+                opt.radius *
+                ((a.approx || b.approx) ? MATCH_APPROX_SCALE : 1);
+
+            if (info.distance > radius) {
                 continue;
             }
 
-            const segmentLength = b.dist - a.dist;
-            const progress = a.dist + info.t * segmentLength;
+            const progress = a.dist + info.t * (b.dist - a.dist);
 
+            if (progress < lo || progress > hi) {
+                continue;
+            }
+
+            /* 점수 = GPS와 도로선 사이 거리(m) + 방향 차이 + 예상 위치와의 차이 (낮을수록 좋음) */
             let score = info.distance;
 
-            /* 진행방향이 맞는 선분을 우선 선택 / 반대 방향은 제외 */
-            if (Number.isFinite(stableHeading)) {
+            let pathBearing = info.bearing;
 
+            if (Number.isFinite(a.bearing) && Number.isFinite(b.bearing)) {
+                pathBearing = blendAngle(a.bearing, b.bearing, info.t);
+            }
+
+            if (Number.isFinite(opt.heading)) {
+
+                /* 선분 방향 / 평활화 방향 중 가까운 쪽 기준 (급커브에서 억울하게 제외되지 않게) */
                 const diff =
-                    angleDifference(stableHeading, info.bearing);
+                    Math.min(
+                        angleDifference(opt.heading, info.bearing),
+                        angleDifference(opt.heading, pathBearing)
+                    );
 
-                if (diff > 110) {
+                if (diff > MATCH_HEADING_LIMIT) {
                     continue;
                 }
 
-                score += diff * 1.6;
+                score += diff * opt.headingWeight;
             }
 
-            /* 기존 진행 위치와의 연속성 */
-            if (matchedProgress !== null) {
+            if (Number.isFinite(opt.expected)) {
+                score += Math.abs(progress - opt.expected) * MATCH_PROGRESS_WEIGHT;
+            }
 
-                const delta = progress - matchedProgress;
-
-                if (delta < -15) {
-                    /* 뒤로 튀는 후보 강하게 감점 */
-                    score += Math.min(-delta - 15, 400) * 2.0;
-
-                } else if (delta > forwardLimit) {
-                    /* 옆 도로로 건너뛰는 후보 감점 */
-                    score += (delta - forwardLimit) * 2.0;
-
-                } else {
-                    score += Math.abs(delta) * 0.05;
-                }
+            if (opt.extra) {
+                score += opt.extra(progress);
             }
 
             if (!best || score < best.score) {
 
                 best = {
-                    lat: a.lat + (b.lat - a.lat) * info.t,
-                    lng: a.lng + (b.lng - a.lng) * info.t,
                     progress: progress,
                     distance: info.distance,
-                    bearing: info.bearing,
+                    bearing: pathBearing,
                     routeIndex: a.routeIndex,
                     score: score
                 };
             }
         }
 
-        if (!best) {
-            offRouteCount++;
-            return null;
-        }
-
-        /* 노선에서 너무 멀면 : 기존 진행 위치를 유지
-           단, 계속 멀면(실제로 노선을 벗어난 경우) 새 위치를 받아들임 */
-        if (best.distance > snapLimit) {
-
-            offRouteCount++;
-
-            if (matchedProgress !== null && offRouteCount < 5) {
-                return null;
-            }
-
-        } else {
-            offRouteCount = 0;
-        }
-
         return best;
     }
 
 
-    /* 노선이 갱신되었을 때 현재 GPS를 다시 노선에 붙임 */
-    function remapCurrentPosition() {
+    /* [추적] 직전 위치에서 순방향으로 이어지는 구간에서만 찾는다 */
+    function trackOnRoute(fix) {
 
-        if (!rawGpsPosition || routePath.length < 2) {
+        const speed =
+            Number.isFinite(fix.speed) ? fix.speed : 8;
+
+        /* 정차 : GPS 도플러 속도가 거의 0 */
+        const stationary =
+            fix.dop && fix.speed < MATCH_STATIONARY_SPEED;
+
+        /* 마지막으로 위치가 확인된 후 경과시간 */
+        const dt =
+            Math.min(20, Math.max(0.5, (fix.t - lastMatchTimestamp) / 1000));
+
+        /* 속도에 맞춰 앞쪽 탐색폭을 정함 (GPS 튐으로 멀리 점프하는 후보는 제외) */
+        const windowSpeed =
+            Math.min(MATCH_MAX_SPEED, Math.max(6, speed * 1.6 + 2));
+
+        const lo = matchedProgress - MATCH_BACK_TOLERANCE;
+        const hi = matchedProgress + windowSpeed * dt + MATCH_FORWARD_MARGIN;
+
+        const expected =
+            matchedProgress + (stationary ? 0 : speed) * dt;
+
+        const radius = getSnapRadius(fix.accuracy);
+
+        const best = scoreCandidates(fix, lo, hi, {
+            radius: radius,
+            heading: fix.heading,
+            headingWeight: MATCH_HEADING_WEIGHT,
+            expected: expected
+        });
+
+        if (!best) {
+            return false;
+        }
+
+        /* GPS 튐 방어 : 속도로 예상한 위치보다 크게 앞선 후보는 한 번만으로 믿지 않고,
+           다음 GPS도 같은 곳을 가리킬 때(실제로 그만큼 이동했을 때)만 인정한다.
+           (진행거리는 줄어들지 않으므로, 튄 값을 한 번 받아들이면 되돌릴 수 없기 때문) */
+        const jumpLimit =
+            MATCH_JUMP_LIMIT + (fix.dop ? 0 : speed * dt * 0.5);
+
+        if (best.progress - expected > jumpLimit) {
+
+            const pending = pendingJump;
+
+            const confirmed =
+                pending !== null &&
+                Math.abs(best.progress - pending.progress) <=
+                    Math.max(15, speed * (fix.t - pending.t) / 1000 + 10);
+
+            if (!confirmed) {
+                pendingJump = { progress: best.progress, t: fix.t };
+                return false;
+            }
+        }
+
+        pendingJump = null;
+
+        /* 버스는 노선을 거꾸로 가지 않음 → 진행거리는 줄어들지 않는다 */
+        let progress = Math.max(matchedProgress, best.progress);
+
+        /* 정차 중 GPS 흔들림으로 진행거리가 조금씩 늘어나지 않도록 고정 */
+        if (
+            stationary &&
+            progress - matchedProgress < Math.max(12, radius)
+        ) {
+            progress = matchedProgress;
+        }
+
+        setMatchedProgress(progress, fix.t);
+
+        return true;
+    }
+
+
+    /* [잠금] 노선 전체에서 후보를 찾는다 (최초 / 계속 놓쳤을 때) */
+    function findLockCandidate(fix) {
+
+        const expectedTime = expectedProgressBySchedule();
+
+        /* 다시 잠그는 경우 : 직전 위치와 가까운 후보를 약하게 선호 */
+        const reference = matchedProgress;
+
+        const radius =
+            Math.min(50, getSnapRadius(fix.accuracy) * MATCH_LOCK_RADIUS_SCALE);
+
+        return scoreCandidates(fix, -Infinity, Infinity, {
+            radius: radius,
+            heading: fix.heading,
+            headingWeight: MATCH_LOCK_HEADING_WEIGHT,
+            expected: null,
+            extra: function(progress) {
+
+                let penalty = 0;
+
+                if (expectedTime !== null) {
+                    penalty += Math.min(
+                        MATCH_TIME_CAP,
+                        Math.abs(progress - expectedTime) * MATCH_TIME_WEIGHT
+                    );
+                }
+
+                if (reference !== null) {
+                    penalty += Math.min(
+                        30,
+                        Math.abs(progress - reference) * 0.01
+                    );
+                }
+
+                return penalty;
+            }
+        });
+    }
+
+
+    function lockToRoute() {
+
+        if (routePath.length < 2) {
+            return false;
+        }
+
+        const fixes =
+            recentFixes
+                .filter(function(f) {
+                    return !(f.accuracy > MATCH_ACCURACY_REJECT);
+                })
+                .slice(-MATCH_LOCK_CONFIRM_FIXES);
+
+        if (fixes.length < MATCH_LOCK_CONFIRM_FIXES) {
+            return false;
+        }
+
+        const candidates = fixes.map(findLockCandidate);
+
+        if (candidates.some(function(c) { return !c; })) {
+            return false;
+        }
+
+        /* 연속된 GPS가 노선 위 같은 위치를 가리키는지 확인 (GPS 한 번 튐으로 잠기지 않도록) */
+        let consistent = true;
+
+        for (let k = 1; k < candidates.length; k++) {
+
+            const dtSec =
+                Math.min(20, Math.max(0.5, (fixes[k].t - fixes[k - 1].t) / 1000));
+
+            const speed =
+                Number.isFinite(fixes[k].speed) ? fixes[k].speed : 8;
+
+            const allowed =
+                30 + Math.min(MATCH_MAX_SPEED, speed) * dtSec * 1.5;
+
+            if (Math.abs(candidates[k].progress - candidates[k - 1].progress) > allowed) {
+                consistent = false;
+            }
+        }
+
+        if (!consistent) {
+
+            lockConsistencyFails++;
+
+            if (lockConsistencyFails < MATCH_LOCK_FORCE_FIXES) {
+                return false;
+            }
+        }
+
+        lockConsistencyFails = 0;
+        pendingJump = null;
+
+        const best = candidates[candidates.length - 1];
+
+        setMatchedProgress(best.progress, fixes[fixes.length - 1].t);
+
+        lostFixCount = 0;
+        lockedOnApproxPath = !geometryComplete();
+
+        /* 안내방송 위치를 조용히 다시 맞춤 (이미 지나간 안내를 한꺼번에 방송하지 않음) */
+        resetAnnouncementState();
+
+        return true;
+    }
+
+
+    function updateMatching(fix) {
+
+        if (routePath.length < 2) {
             return;
         }
 
-        const matched =
-            matchGpsToRoute(rawGpsPosition, 20, Date.now());
-
-        if (!matched) {
+        /* 정확도가 너무 나쁜 GPS는 위치 판단에 쓰지 않음 (기존 위치 유지) */
+        if (fix.accuracy > MATCH_ACCURACY_REJECT) {
             return;
         }
 
-        matchedProgress = matched.progress;
-        matchedPoint = L.latLng(matched.lat, matched.lng);
-        matchedRouteIndex = matched.routeIndex;
-        lastMatchTimestamp = Date.now();
+        if (matchedProgress === null) {
+            lockToRoute();
+            return;
+        }
 
-        lastGpsPosition = matchedPoint;
+        if (trackOnRoute(fix)) {
+            lostFixCount = 0;
+            return;
+        }
 
-        if (currentLocationMarker) {
-            currentLocationMarker.setLatLng(matchedPoint);
+        /* 이번 GPS는 노선에 붙지 않음 → 기존 위치 유지, 계속 놓치면 전체에서 다시 잠금
+           (종점에 도착해 있다가 다시 움직이면 새 회차 출발일 가능성이 높아 더 빨리 다시 잠금) */
+        lostFixCount++;
+
+        const relockFixes =
+            matchedProgress >= totalRouteLength - MATCH_END_ZONE
+                ? MATCH_END_RELOCK_FIXES
+                : MATCH_LOST_RELOCK_FIXES;
+
+        if (lostFixCount >= relockFixes) {
+            lockToRoute();
         }
     }
 
 
     /* ============================================================
        이번 정류장 / 다음 정류장
-       - 노선 위 진행거리(matchedProgress) 기준
-       - 정류장을 기준거리(30m / 15m)만큼 지나면 다음 정류장으로 전환
+       - 노선 위 진행거리(matchedProgress) 기준 (순방향으로만 증가)
+       - 정류장을 "출발 후" 기준거리만큼 지나면 다음 정류장으로 전환
     ============================================================ */
 
     function getCurrentStationIndex() {
@@ -2374,7 +3058,7 @@ departureTimeSelect.addEventListener('change', function() {
             const index = realStationIndexes[k];
 
             const departDistance =
-                getStationTriggerDistance(index);
+                getStationDepartDistance(index);
 
             if (matchedProgress <= stationProgress[index] + departDistance) {
                 return index;
@@ -2404,10 +3088,10 @@ departureTimeSelect.addEventListener('change', function() {
     /* ============================================================
        정류장 안내방송
        - 안내방송 ON일 때만 동작
-       - 정류장 도착 30m 전 : "이번 정류장은 00 입니다."
-       - 정류장 출발 30m 후 : "다음 정류장은 00 입니다."
-       - 정류장 간격이 좁은 곳(02번 장기탑승장3-4 등)은 15m 기준
-       - 같은 정류장에 대해서는 한 번만 방송
+       - 정류장 도착 50m 전 : "이번 정류장은 00 입니다."
+       - 정류장 출발 50m 후 : "다음 정류장은 00 입니다."
+       - 정류장 간격이 좁은 곳(01·02번 장기탑승장 등)은 간격에 맞춰 줄어든 거리 기준
+       - 같은 안내는 한 번만, 노선 순방향 순서로만 방송
        - 판단 기준은 보정된(노선에 붙인) 위치의 진행거리
        ============================================================ */
 
@@ -2415,15 +3099,6 @@ departureTimeSelect.addEventListener('change', function() {
         document.getElementById('stationAnnouncementButton');
 
     let stationAnnouncementEnabled = false;
-
-    // 마지막으로 "이번 정류장" 방송을 한 정류장
-    let lastArrivedAnnouncementIndex = -1;
-
-    // 마지막으로 "다음 정류장" 방송을 한 정류장
-    let lastNextAnnouncementIndex = -1;
-
-    // 직전 GPS에서 판단한 정류장
-    let previousDisplayedStationIndex = -1;
 
 
     function speakStationAnnouncement(text) {
@@ -2545,68 +3220,95 @@ departureTimeSelect.addEventListener('change', function() {
 
 
     /* ------------------------------------------------------------
-       안내방송 처리
-       - 도착 전 (기준거리) : "이번 정류장은 00 입니다."
-       - 출발 후 (기준거리) : "다음 정류장은 00 입니다."
-         → 출발 후 기준거리를 지나면 이번 정류장이 다음 정류장으로
-           바뀌므로, 정류장이 바뀌는 순간 방송한다.
+       안내방송 처리 (노선 경로 데이터 순방향 순서로만 진행)
+       - 정류장마다 :  [도착 전 기준거리]  "이번 정류장은 00 입니다."
+                    →  [출발 후 기준거리]  "다음 정류장은 00 입니다."
+         (기준거리 기본 50m. 정류장 간격이 좁으면 줄어듦 - computeStationTriggerDistances)
+       - 보정된(노선에 붙인) 위치의 진행거리가 해당 지점을 넘을 때만 방송
+         → 진행거리는 줄어들지 않으므로 같은 안내가 반복되거나 되돌아가지 않음
+       - GPS 공백/재잠금으로 여러 지점을 한꺼번에 넘은 경우 :
+         지나간 안내는 건너뛰고 가장 마지막 안내 하나만 방송 (순서 뒤섞임 방지)
+       - 회차 시작 / 위치를 처음(다시) 잠근 직후에는
+         이미 지난 안내를 방송하지 않고 위치만 맞춤
        ------------------------------------------------------------ */
 
-    function handleStationAnnouncement(currentIndex) {
+    function speakAnnouncementEvent(event) {
 
-        const station = activeRouteData[currentIndex];
+        if (event.type === 'arrive') {
 
-        if (!station) {
+            const index = event.index;
+
+            /* GPS 공백 등으로 정류장을 이미 충분히 지나쳤다면 도착 안내는 생략 */
+            if (
+                matchedProgress >
+                stationProgress[index] + getStationArriveDistance(index)
+            ) {
+                return;
+            }
+
+            speakStationAnnouncement(
+                `이번 정류장은 ${activeRouteData[index].title} 입니다. ` +
+                getStationArrivalSpeech(index)
+            );
+
             return;
         }
 
-        /* 정류장이 바뀐 순간 = 직전 정류장을 기준거리만큼 지난 시점 */
-        if (
-            previousDisplayedStationIndex !== -1 &&
-            previousDisplayedStationIndex !== currentIndex
-        ) {
+        /* depart : 이번 정류장을 출발 후 기준거리만큼 지남 → 다음 정류장 안내 */
+        const nextIndex = realStationIndexes[event.k + 1];
 
-            if (
-                stationAnnouncementEnabled &&
-                lastNextAnnouncementIndex !== currentIndex
+        if (nextIndex === undefined) {
+            return;
+        }
+
+        speakStationAnnouncement(
+            `다음 정류장은 ${activeRouteData[nextIndex].title} 입니다. ` +
+            getStationArrivalSpeech(nextIndex)
+        );
+    }
+
+
+    function handleStationAnnouncement() {
+
+        if (matchedProgress === null || announceEvents.length === 0) {
+            return;
+        }
+
+        /* 위치를 처음(다시) 잠근 직후 : 이미 지난 안내는 건너뛰고 위치만 맞춤 */
+        if (announcePtr < 0) {
+
+            let synced = 0;
+
+            while (
+                synced < announceEvents.length &&
+                announceEvents[synced].at <= matchedProgress
             ) {
-
-                speakStationAnnouncement(
-                    `다음 정류장은 ${station.title} 입니다. ` +
-                    getStationArrivalSpeech(currentIndex)
-                );
+                synced++;
             }
 
-            lastNextAnnouncementIndex = currentIndex;
+            announcePtr = synced;
+            return;
         }
 
-        previousDisplayedStationIndex = currentIndex;
+        let due = announcePtr;
 
-
-        /* 도착 전 기준거리 진입 */
-        const arriveDistance =
-            getStationTriggerDistance(currentIndex);
-
-        const remaining =
-            stationProgress[currentIndex] - matchedProgress;
-
-        if (
-            remaining <= arriveDistance &&
-            remaining >= -arriveDistance
+        while (
+            due < announceEvents.length &&
+            announceEvents[due].at <= matchedProgress
         ) {
-
-            if (lastArrivedAnnouncementIndex !== currentIndex) {
-
-                if (stationAnnouncementEnabled) {
-                    speakStationAnnouncement(
-                        `이번 정류장은 ${station.title} 입니다. ` +
-                        getStationArrivalSpeech(currentIndex)
-                    );
-                }
-
-                lastArrivedAnnouncementIndex = currentIndex;
-            }
+            due++;
         }
+
+        if (due === announcePtr) {
+            return;
+        }
+
+        /* 순방향으로 지나간 안내들 중 가장 마지막 것만 방송 */
+        const event = announceEvents[due - 1];
+
+        announcePtr = due;
+
+        speakAnnouncementEvent(event);
     }
 
 
@@ -2659,7 +3361,7 @@ departureTimeSelect.addEventListener('change', function() {
 
 
         /* 안내방송 */
-        handleStationAnnouncement(currentIndex);
+        handleStationAnnouncement();
 
 
         /* 이번 정류장 (윗줄) */
