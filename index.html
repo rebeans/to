@@ -1684,6 +1684,7 @@ departureTimeSelect.addEventListener('change', function() {
     let currentLocationMarker = null;
     let gpsWatchId = null;
     let gpsFollowMode = false;
+    let gpsPendingInitialZoom = false;  // 추적 ON 상태에서 첫 GPS를 받으면 지도를 확대해 이동
 
     const gpsLocateButton =
         document.getElementById('gpsLocateButton');
@@ -1923,9 +1924,17 @@ departureTimeSelect.addEventListener('change', function() {
 
         /* 현재위치 추적 모드가 켜져 있을 때만 GPS를 따라 지도 중심 이동 */
         if (gpsFollowMode) {
+
+            const zoom =
+                gpsPendingInitialZoom
+                    ? Math.max(map.getZoom(), 16)
+                    : map.getZoom();
+
+            gpsPendingInitialZoom = false;
+
             map.setView(
                 lastGpsPosition,
-                map.getZoom(),
+                zoom,
                 { animate: false }
             );
         }
@@ -1943,34 +1952,73 @@ departureTimeSelect.addEventListener('change', function() {
             error.message
         );
 
+        /* 위치 권한이 거부되면 감시가 더 이상 동작하지 않으므로 추적 표시를 끈다.
+           (타임아웃/일시적 신호 불량은 감시가 계속 재시도하므로 추적 유지) */
+        if (error.code === 1) {
+
+            stopGpsWatch();
+            setGpsFollowMode(false);
+
+        }
+
     }
 
 
     /*
-     * GPS 감시 시작
+     * GPS 감시 시작 / 중지
+     * - 페이지 접속 시 바로 시작
+     * - 다른 앱/탭에 갔다가 돌아오면(백그라운드에서 감시가 끊기는 경우 대비) 다시 시작
      */
-    if (
-        'geolocation' in navigator
-    ) {
+    const GPS_WATCH_OPTIONS = {
+        enableHighAccuracy: true,
+        maximumAge: 1000,
+        timeout: 15000
+    };
+
+    function stopGpsWatch() {
+
+        if (gpsWatchId !== null) {
+            navigator.geolocation.clearWatch(gpsWatchId);
+            gpsWatchId = null;
+        }
+
+    }
+
+    function startGpsWatch() {
+
+        if (!('geolocation' in navigator)) {
+
+            console.log(
+                '이 브라우저에서는 GPS를 지원하지 않습니다.'
+            );
+
+            return;
+        }
+
+        /* 이미 감시 중이어도 새로 시작해서 끊긴 감시를 되살림 */
+        stopGpsWatch();
 
         gpsWatchId =
             navigator.geolocation.watchPosition(
                 processGpsPosition,
                 handleGpsError,
-                {
-                    enableHighAccuracy: true,
-                    maximumAge: 1000,
-                    timeout: 15000
-                }
+                GPS_WATCH_OPTIONS
             );
 
-    } else {
-
-        console.log(
-            '이 브라우저에서는 GPS를 지원하지 않습니다.'
+        /* watchPosition의 첫 응답이 늦을 수 있어 현재 위치를 한 번 더 바로 요청 */
+        navigator.geolocation.getCurrentPosition(
+            processGpsPosition,
+            function() { /* 오류는 watchPosition의 handleGpsError가 처리 */ },
+            {
+                enableHighAccuracy: true,
+                maximumAge: 5000,
+                timeout: 15000
+            }
         );
 
     }
+
+    startGpsWatch();
 
 
     /*
@@ -1987,11 +2035,20 @@ departureTimeSelect.addEventListener('change', function() {
         gpsLocateButton.classList.toggle('following', enabled);
 
         if (enabled && lastGpsPosition) {
+
+            gpsPendingInitialZoom = false;
+
             map.setView(
                 lastGpsPosition,
                 Math.max(map.getZoom(), 16),
                 { animate: true }
             );
+
+        } else if (enabled) {
+
+            /* 아직 위치를 못 받았으면 첫 GPS 수신 때 현재 위치로 확대 이동 */
+            gpsPendingInitialZoom = true;
+
         }
 
         /* 추적 모드를 켜는 즉시 현재 운행 중인 출발시간으로 맞춤 */
@@ -2013,6 +2070,11 @@ departureTimeSelect.addEventListener('change', function() {
 
             /* 추적 중이 아니면 현재 위치 추적 ON */
             setGpsFollowMode(true);
+
+            /* 감시가 꺼져 있었다면(권한 거부 후 허용 등) 다시 시작 */
+            if (gpsWatchId === null) {
+                startGpsWatch();
+            }
 
             if (lastGpsPosition) {
                 return;
@@ -3452,6 +3514,42 @@ departureTimeSelect.addEventListener('change', function() {
     ============================================================ */
 
     initializeDepartureSelection();
+
+
+    /* ============================================================
+       현재위치 추적 자동 시작
+       - 페이지 접속 시 버튼을 누르지 않아도 바로 추적 ON
+       - 다른 앱/탭에 갔다가 돌아오거나, 화면을 껐다 켜거나,
+         뒤로가기/앞으로가기로 페이지가 복원될 때도 다시 추적 ON
+    ============================================================ */
+
+    function resumeGpsTracking() {
+
+        startGpsWatch();
+        setGpsFollowMode(true);
+
+    }
+
+    /* 접속(새로고침 포함) 즉시 시작 */
+    setGpsFollowMode(true);
+
+    /* 다른 앱/탭 → 다시 이 페이지로 돌아왔을 때 */
+    document.addEventListener('visibilitychange', function() {
+
+        if (document.visibilityState === 'visible') {
+            resumeGpsTracking();
+        }
+
+    });
+
+    /* 브라우저 캐시(bfcache)에서 페이지가 복원됐을 때 */
+    window.addEventListener('pageshow', function(event) {
+
+        if (event.persisted) {
+            resumeGpsTracking();
+        }
+
+    });
 
 
 </script>
